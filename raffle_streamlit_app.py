@@ -93,12 +93,13 @@ def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
 # ---------- Pure-JS wheel (no external libraries) ----------
 def render_pure_wheel(display_labels, full_labels):
     """
-    HTML wheel (Canvas + requestAnimationFrame).
+    HTML wheel (Canvas + requestAnimationFrame) with label clipping.
     - display_labels: names shown on slices (duplicates allowed).
     - full_labels: full entries aligned 1:1 with display_labels.
-    - Pointer on RIGHT, triangle flipped 180°; slice under the pointer wins.
-    - Labels are TANGENTIAL to the circle (parallel to the slice arc), centered in each slice.
-    - After a spin:
+    - Pointer on RIGHT (triangle flipped); slice under the pointer wins.
+    - Labels are clipped to their wedge so they never spill outside the slice.
+      Font size auto-fits to the slice arc length.
+    - Buttons:
         * Eliminate Winner (1 slice) -> removes that exact slice
         * Eliminate All (same name)  -> removes all slices with that name
         * Reset -> restores original pool
@@ -167,8 +168,8 @@ const CX = W/2, CY = H/2, R = Math.min(W, H)*0.46;
 const innerR = R*0.30;   // inner hole radius
 const twoPi = Math.PI * 2;
 
-// Tangential label radius (midway between inner hole and outer rim)
-const labelR = innerR + (R - innerR) * 0.62;  // push this toward 0.7 to move closer to rim
+// label radius (mid band of the slice)
+const labelR = innerR + (R - innerR) * 0.60;
 
 const spinBtn = document.getElementById('spin');
 const resetBtn = document.getElementById('reset');
@@ -190,42 +191,46 @@ function pastel(i) {{
   return 'hsl(' + hue + ',70%,60%)';
 }}
 
-// Draw label tangent to the circle, centered in the slice
-function drawTangentialText(text, midAngle, sliceAngle) {{
+// Draw one label, clipped to its wedge, auto-fitting font size to the available arc.
+function drawLabelClipped(text, start, end) {{
+  const mid = (start + end) / 2;
+  const sliceAngle = end - start;
+  const maxArc = sliceAngle * labelR * 0.90; // 90% of arc length as width budget
+
+  // Create wedge clip
   ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(CX, CY);
+  ctx.arc(CX, CY, R, start, end);
+  ctx.closePath();
+  ctx.clip();
+
+  // Rotate to tangent orientation at the slice centerline
   ctx.translate(CX, CY);
+  let rot = mid + Math.PI/2;
+  // Keep text upright for readability (optional)
+  if (Math.sin(mid) < 0) rot += Math.PI;
+  ctx.rotate(rot);
 
-  // tangent direction = midAngle + 90deg
-  let rot = midAngle + Math.PI/2;
-
-  // keep upright: if text would be upside-down, flip 180°
-  if (Math.sin(midAngle) < 0) {{
-    rot += Math.PI;
+  // Find font size that fits within available arc
+  let fontSize = 18;
+  ctx.font = fontSize + 'px sans-serif';
+  let width = ctx.measureText(text).width;
+  if (width > maxArc) {{
+    fontSize = Math.max(10, Math.floor(fontSize * (maxArc / width)));
+    ctx.font = fontSize + 'px sans-serif';
   }}
 
-  ctx.rotate(rot);
-  ctx.font = '16px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#111';
+
+  // High-contrast outline + fill
   ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-  ctx.lineWidth = 3;
+  ctx.lineWidth = Math.max(2, Math.floor(fontSize/6));
+  ctx.fillStyle = '#111';
 
-  // width budget: arc length at label radius, with some padding
-  const arcLen = sliceAngle * labelR * 0.86;
-
-  let show = text;
-  let w = ctx.measureText(show).width;
-  if (w > arcLen) {{
-    const avg = 8; // px/char approx for 16px font
-    const maxChars = Math.max(3, Math.floor(arcLen / avg));
-    show = show.length > maxChars ? show.slice(0, maxChars - 1) + '…' : show;
-    w = ctx.measureText(show).width;
-  }}
-
-  // draw at (labelR, 0) in the rotated frame
-  ctx.strokeText(show, labelR, 0);
-  ctx.fillText(show, labelR, 0);
+  ctx.strokeText(text, labelR, 0);
+  ctx.fillText(text, labelR, 0);
 
   ctx.restore();
 }}
@@ -254,15 +259,14 @@ function drawWheel(a) {{
     ctx.fill();
   }}
 
-  // 2) Then draw all labels on top (tangential)
+  // 2) Draw all labels on top, each clipped to its wedge
   for (let i=0; i<n; i++) {{
     const start = a + i*slice;
     const end   = a + (i+1)*slice;
-    const mid   = (start + end) / 2;
-    drawTangentialText(displayPool[i], mid, slice);
+    drawLabelClipped(displayPool[i], start, end);
   }}
 
-  // inner circle last
+  // 3) Draw inner circle last
   ctx.beginPath();
   ctx.arc(CX, CY, innerR, 0, twoPi);
   ctx.fillStyle = '#fff';
@@ -312,7 +316,7 @@ function spin() {{
       spinning = false;
       lastWinnerIndex = idx;
       const full = fullPool[idx] || '';
-      winnerEl.textContent = '🏆 Winner: ' + full;  // show full entry
+      winnerEl.textContent = '🏆 Winner: ' + full;  // full entry
       remove1Btn.disabled = false;
       removeAllBtn.disabled = false;
     }}
@@ -398,7 +402,7 @@ if uploaded is not None:
         xls = pd.ExcelFile(uploaded, engine="openpyxl")
         sheet_name = st.selectbox("Select worksheet", options=xls.sheet_names, index=0)
         df = pd.read_excel(xls, sheet_name=sheet_name, dtype=str, engine="openpyxl")
-        st.success(f"Loaded **{sheet_name}** with {len(df):,} rows and {len(df.columns)} columns.")
+        st.success(f"Loaded **{sheet_name}** with {len(df):,} rows and {len[df.columns)} columns.")
         st.dataframe(df.head(10), use_container_width=True)
     except Exception as e:
         st.exception(e)
