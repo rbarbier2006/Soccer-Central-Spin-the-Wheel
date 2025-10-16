@@ -91,16 +91,20 @@ def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
     return buf.read()
 
 # ---------- Pure-JS wheel (no external libraries) ----------
-def render_pure_wheel(display_labels):
+def render_pure_wheel(display_labels, full_labels):
     """
-    Returns an HTML string that renders a spinning wheel using plain Canvas + requestAnimationFrame.
-    - display_labels: array of text to show on slices (duplicates allowed for ticket weighting)
-    - Eliminate Winner button removes all slices matching the winner's displayed name
-    - Reset restores original labels
-    - Pointer points DOWN; slice under the pointer wins
-    - Every spin does a full smooth spin (no 'short' spins after the first)
+    Returns HTML for a spinning wheel using plain Canvas + requestAnimationFrame.
+    - display_labels: what appears on the wheel (names only; duplicates allowed)
+    - full_labels: full entry for each slice (aligned 1:1 with display_labels)
+    - Pointer sits on the RIGHT, pointing left into the wheel; the slice touching it wins.
+    - Spin always does a long, smooth spin.
+    - Buttons:
+        * Eliminate Winner (1 slice)  -> removes only the exact slice that won
+        * Eliminate All (same name)   -> removes all slices with that displayed name
+        * Reset                       -> restores original pool
     """
-    labels_json = json.dumps([str(x) for x in display_labels if str(x).strip() != ""])
+    display_json = json.dumps([str(x) for x in display_labels])
+    full_json = json.dumps([str(x) for x in full_labels])
     disabled_attr = "disabled" if len(display_labels) == 0 else ""
 
     return f"""
@@ -113,11 +117,11 @@ def render_pure_wheel(display_labels):
   .wrap {{ display:flex; flex-direction:column; align-items:center; gap:16px; padding:8px; }}
   #wheel {{ position:relative; width:560px; height:560px; }}
   #wheel canvas {{ width:560px; height:560px; background:#fff; border-radius:50%; }}
-  /* Pointer pointing DOWN to the wheel */
+  /* RIGHT-side pointer, pointing LEFT into the wheel */
   .pointer {{
-    position:absolute; left:50%; top:-2px; transform:translateX(-50%);
-    width:0; height:0; border-left:14px solid transparent; border-right:14px solid transparent;
-    border-bottom:26px solid #444; filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));
+    position:absolute; right:-2px; top:50%; transform:translateY(-50%);
+    width:0; height:0; border-top:14px solid transparent; border-bottom:14px solid transparent;
+    border-left:26px solid #444; filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));
   }}
   .btn {{
     background:#4F46E5; color:#fff; border:none; padding:10px 16px; border-radius:10px;
@@ -125,6 +129,7 @@ def render_pure_wheel(display_labels):
   }}
   .btn.secondary {{ background:#6B7280; }}
   .btn.warn {{ background:#DC2626; }}
+  .btn.altwarn {{ background:#EF4444; }}
   .btn:disabled {{ background:#9AA0A6; cursor:not-allowed; }}
   .winner {{ font-weight:700; min-height:1.5em; }}
   .row {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center; }}
@@ -141,46 +146,54 @@ def render_pure_wheel(display_labels):
   <div class="row">
     <button id="spin" class="btn" {disabled_attr}>Spin 🎯</button>
     <button id="reset" class="btn secondary">Reset</button>
-    <button id="remove" class="btn warn" disabled>Eliminate Winner</button>
+    <button id="remove1" class="btn warn" disabled>Eliminate Winner (1 slice)</button>
+    <button id="removeAll" class="btn altwarn" disabled>Eliminate All (same name)</button>
   </div>
   <div id="winner" class="winner"></div>
   <div class="muted" id="count"></div>
 </div>
 
 <script>
-const original = {labels_json};   // original pool for Reset
-let pool = original.slice();      // current pool
-let lastWinner = null;
+const origDisplay = {display_json};  // names shown on wheel
+const origFull    = {full_json};     // full entries, aligned to names
+
+let displayPool = origDisplay.slice();
+let fullPool    = origFull.slice();
+
+let lastWinnerIndex = null;  // exact slice index that won
 
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const W = canvas.width, H = canvas.height;
 const CX = W/2, CY = H/2, R = Math.min(W, H)*0.46;
-const innerR = R*0.3;
+const innerR = R*0.3;              // inner hole (where labels start "from center")
 const twoPi = Math.PI * 2;
 
+// Controls
 const spinBtn = document.getElementById('spin');
 const resetBtn = document.getElementById('reset');
-const removeBtn = document.getElementById('remove');
+const remove1Btn = document.getElementById('remove1');
+const removeAllBtn = document.getElementById('removeAll');
 const winnerEl = document.getElementById('winner');
 const countEl = document.getElementById('count');
 
 let angle = 0;           // current rotation (radians)
 let spinning = false;
 
+// Utility
 function updateCount() {{
-  countEl.textContent = pool.length + " slice" + (pool.length===1?"":"s") + " on wheel";
+  countEl.textContent = displayPool.length + " slice" + (displayPool.length===1?"":"s") + " on wheel";
 }}
 updateCount();
 
 function pastel(i) {{
-  const hue = (i * 137.508) % 360;
+  const hue = (i * 137.508) % 360;    // good spread
   return 'hsl(' + hue + ',70%,60%)';
 }}
 
 function drawWheel(a) {{
   ctx.clearRect(0,0,W,H);
-  const n = pool.length;
+  const n = displayPool.length;
   if (n === 0) {{
     ctx.fillStyle = '#666';
     ctx.font = '16px sans-serif';
@@ -190,10 +203,11 @@ function drawWheel(a) {{
   }}
   const slice = twoPi / n;
 
-  // draw slices
   for (let i=0; i<n; i++) {{
     const start = a + i*slice;
     const end   = a + (i+1)*slice;
+
+    // wedge
     ctx.beginPath();
     ctx.moveTo(CX, CY);
     ctx.arc(CX, CY, R, start, end);
@@ -201,18 +215,20 @@ function drawWheel(a) {{
     ctx.fillStyle = pastel(i);
     ctx.fill();
 
-    // label (only the name is already provided by Python)
+    // label: start "from the center" (just outside inner circle), radial orientation
     const mid = (start + end) / 2;
-    const rx = CX + Math.cos(mid) * (R*0.72);
-    const ry = CY + Math.sin(mid) * (R*0.72);
+    const labelR = innerR + (R - innerR) * 0.22; // closer to center like your screenshot
+    const rx = CX + Math.cos(mid) * labelR;
+    const ry = CY + Math.sin(mid) * labelR;
     ctx.save();
     ctx.translate(rx, ry);
-    ctx.rotate(mid + Math.PI/2); // radial orientation
+    ctx.rotate(mid + Math.PI/2);
     ctx.fillStyle = '#111';
     ctx.font = '14px sans-serif';
-    const text = (pool[i].length <= 26) ? pool[i] : pool[i].slice(0,23) + '...';
+    const text = displayPool[i];
+    const show = (text.length <= 26) ? text : text.slice(0,23) + '...';
     ctx.textAlign = 'center';
-    ctx.fillText(text, 0, 5);
+    ctx.fillText(show, 0, 5);
     ctx.restore();
   }}
 
@@ -223,33 +239,35 @@ function drawWheel(a) {{
   ctx.fill();
 }}
 
+// Easing + angle math
 function easeOutCubic(t) {{ return 1 - Math.pow(1 - t, 3); }}
 function modTau(x) {{ const t = twoPi; x = x % t; return x < 0 ? x + t : x; }}
 
+// Pointer sits at angle 0 (right). Align center of slice to angle 0.
 function targetAngleForIndex(idx) {{
-  // Align center of slice idx to top (pointer) with zero added spins
-  const n = pool.length;
+  const n = displayPool.length;
   const slice = twoPi / n;
   const center = (idx + 0.5) * slice;
-  return -Math.PI/2 - center;  // base alignment
+  return 0 - center;  // pointerAngle(=0) - center
 }}
 
 function spin() {{
-  if (spinning || pool.length === 0) return;
-  spinning = true; lastWinner = null; removeBtn.disabled = true;
+  if (spinning || displayPool.length === 0) return;
+  spinning = true;
+  lastWinnerIndex = null;
+  remove1Btn.disabled = true;
+  removeAllBtn.disabled = true;
   winnerEl.textContent = '';
 
-  // pick random winner index in current pool
-  const n = pool.length;
+  const n = displayPool.length;
   const idx = Math.floor(Math.random() * n);
 
-  // compute a long spin from current angle to the target index
+  // Always a long, satisfying spin
   const baseTarget = targetAngleForIndex(idx);
   const start = angle;
-  // smallest positive rotation to baseTarget from current angle
   const deltaBase = modTau(baseTarget - modTau(start));
-  const fullSpins = 6 * twoPi;               // always do 6 full spins
-  const end = start + deltaBase + fullSpins; // guaranteed long, smooth spin
+  const fullSpins = 6 * twoPi;              // 6 full spins every time
+  const end = start + deltaBase + fullSpins;
 
   const duration = 5000; // ms
   const t0 = performance.now();
@@ -263,39 +281,67 @@ function spin() {{
       requestAnimationFrame(frame);
     }} else {{
       spinning = false;
-      const winner = pool[idx] || '';
-      lastWinner = winner;
-      winnerEl.textContent = '🏆 Winner: ' + winner;
-      removeBtn.disabled = false; // enable removal option
+      lastWinnerIndex = idx;
+      // Show FULL entry for the winner
+      const full = fullPool[idx] || '';
+      winnerEl.textContent = '🏆 Winner: ' + full;
+      remove1Btn.disabled = false;
+      removeAllBtn.disabled = false;
     }}
   }}
   requestAnimationFrame(frame);
 }}
 
 function resetWheel() {{
-  pool = original.slice();
-  angle = 0; lastWinner = null; removeBtn.disabled = true;
+  displayPool = origDisplay.slice();
+  fullPool    = origFull.slice();
+  angle = 0; lastWinnerIndex = null;
+  remove1Btn.disabled = true;
+  removeAllBtn.disabled = true;
   winnerEl.textContent = '';
   drawWheel(angle);
   updateCount();
+  spinBtn.disabled = (displayPool.length === 0);
 }}
 
-function removeWinner() {{
-  if (!lastWinner) return;
-  // remove ALL slices with that name
-  pool = pool.filter(x => x !== lastWinner);
-  lastWinner = null;
-  removeBtn.disabled = true;
+function removeWinnerOne() {{
+  if (lastWinnerIndex == null) return;
+  if (lastWinnerIndex >= 0 && lastWinnerIndex < displayPool.length) {{
+    displayPool.splice(lastWinnerIndex, 1);
+    fullPool.splice(lastWinnerIndex, 1);
+  }}
+  lastWinnerIndex = null;
+  remove1Btn.disabled = true;
+  removeAllBtn.disabled = true;
   drawWheel(angle);
   updateCount();
-  if (pool.length === 0) {{
-    spinBtn.disabled = true;
+  if (displayPool.length === 0) spinBtn.disabled = true;
+}}
+
+function removeWinnerAll() {{
+  if (lastWinnerIndex == null) return;
+  const name = displayPool[lastWinnerIndex];
+  const newDisplay = [], newFull = [];
+  for (let i=0; i<displayPool.length; i++) {{
+    if (displayPool[i] !== name) {{
+      newDisplay.push(displayPool[i]);
+      newFull.push(fullPool[i]);
+    }}
   }}
+  displayPool = newDisplay;
+  fullPool = newFull;
+  lastWinnerIndex = null;
+  remove1Btn.disabled = true;
+  removeAllBtn.disabled = true;
+  drawWheel(angle);
+  updateCount();
+  if (displayPool.length === 0) spinBtn.disabled = true;
 }}
 
 spinBtn.addEventListener('click', spin);
 resetBtn.addEventListener('click', resetWheel);
-removeBtn.addEventListener('click', removeWinner);
+remove1Btn.addEventListener('click', removeWinnerOne);
+removeAllBtn.addEventListener('click', removeWinnerAll);
 
 // initial draw
 drawWheel(angle);
@@ -367,10 +413,14 @@ if df is not None:
     st.divider()
     st.header("🎰 Spin the Wheel")
 
-    # Show only the name on the wheel (text before the first " - ")
-    display_names = out_df["Entry"].fillna("").astype(str).str.split(" - ").str[0].tolist()
+    # Prepare aligned lists:
+    #   full_entries -> full "Name - Email - Phone" per slice
+    #   display_names -> just the name (text before first " - ") per slice
+    full_entries = out_df["Entry"].fillna("").astype(str).tolist()
+    display_names = [s.split(" - ")[0] for s in full_entries]
+
     if len(display_names) == 0:
         st.warning("No entries to spin. Check the ID filter and that Tickets Purchased > 0.")
-    st_html(render_pure_wheel(display_names), height=760)
+    st_html(render_pure_wheel(display_names, full_entries), height=800)
 
 st.caption("Required headers: ID1, Full Name, Email1, Phone Number, Tickets Purchased.")
