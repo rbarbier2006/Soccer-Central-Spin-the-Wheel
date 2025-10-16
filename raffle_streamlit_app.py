@@ -402,7 +402,7 @@ if uploaded is not None:
         xls = pd.ExcelFile(uploaded, engine="openpyxl")
         sheet_name = st.selectbox("Select worksheet", options=xls.sheet_names, index=0)
         df = pd.read_excel(xls, sheet_name=sheet_name, dtype=str, engine="openpyxl")
-        st.success(f"Loaded **{sheet_name}** with {len(df):,} rows and {len[df.columns)} columns.")
+        st.success(f"Loaded **{sheet_name}** with {len(df):,} rows and {len(df.columns)} columns.")
         st.dataframe(df.head(10), use_container_width=True)
     except Exception as e:
         st.exception(e)
