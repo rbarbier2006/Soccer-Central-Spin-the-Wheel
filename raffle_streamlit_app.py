@@ -97,7 +97,7 @@ def render_pure_wheel(display_labels, full_labels):
     - display_labels: names shown on slices (duplicates allowed).
     - full_labels: full entries aligned 1:1 with display_labels.
     - Pointer on RIGHT, triangle flipped 180°; slice under the pointer wins.
-    - Labels drawn from the inner circle outward, parallel to slice sides.
+    - Labels are TANGENTIAL to the circle (parallel to the slice arc), centered in each slice.
     - After a spin:
         * Eliminate Winner (1 slice) -> removes that exact slice
         * Eliminate All (same name)  -> removes all slices with that name
@@ -167,6 +167,9 @@ const CX = W/2, CY = H/2, R = Math.min(W, H)*0.46;
 const innerR = R*0.30;   // inner hole radius
 const twoPi = Math.PI * 2;
 
+// Tangential label radius (midway between inner hole and outer rim)
+const labelR = innerR + (R - innerR) * 0.62;  // push this toward 0.7 to move closer to rim
+
 const spinBtn = document.getElementById('spin');
 const resetBtn = document.getElementById('reset');
 const remove1Btn = document.getElementById('remove1');
@@ -187,40 +190,42 @@ function pastel(i) {{
   return 'hsl(' + hue + ',70%,60%)';
 }}
 
-// Text from inner circle outward, parallel to slice sides.
-function drawRadialText(text, midAngle) {{
+// Draw label tangent to the circle, centered in the slice
+function drawTangentialText(text, midAngle, sliceAngle) {{
   ctx.save();
   ctx.translate(CX, CY);
 
-  // keep upright; flip when on left half
-  let rot = midAngle;
-  let align = 'left';
-  if (Math.cos(midAngle) < 0) {{
+  // tangent direction = midAngle + 90deg
+  let rot = midAngle + Math.PI/2;
+
+  // keep upright: if text would be upside-down, flip 180°
+  if (Math.sin(midAngle) < 0) {{
     rot += Math.PI;
-    align = 'right';
   }}
+
   ctx.rotate(rot);
-  ctx.font = '14px sans-serif';
-  ctx.textAlign = align;
+  ctx.font = '16px sans-serif';
+  ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#111';
-  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
   ctx.lineWidth = 3;
 
-  const startR = innerR + 10;     // anchor near center
-  const endR   = R * 0.92;
-  const maxW   = endR - startR;
+  // width budget: arc length at label radius, with some padding
+  const arcLen = sliceAngle * labelR * 0.86;
 
   let show = text;
   let w = ctx.measureText(show).width;
-  if (w > maxW) {{
-    const avg = 7; // px/char approx
-    const maxChars = Math.max(3, Math.floor(maxW / avg));
+  if (w > arcLen) {{
+    const avg = 8; // px/char approx for 16px font
+    const maxChars = Math.max(3, Math.floor(arcLen / avg));
     show = show.length > maxChars ? show.slice(0, maxChars - 1) + '…' : show;
+    w = ctx.measureText(show).width;
   }}
 
-  ctx.strokeText(show, startR, 0);
-  ctx.fillText(show, startR, 0);
+  // draw at (labelR, 0) in the rotated frame
+  ctx.strokeText(show, labelR, 0);
+  ctx.fillText(show, labelR, 0);
 
   ctx.restore();
 }}
@@ -249,12 +254,12 @@ function drawWheel(a) {{
     ctx.fill();
   }}
 
-  // 2) Then draw all labels on top
+  // 2) Then draw all labels on top (tangential)
   for (let i=0; i<n; i++) {{
     const start = a + i*slice;
     const end   = a + (i+1)*slice;
     const mid   = (start + end) / 2;
-    drawRadialText(displayPool[i], mid);
+    drawTangentialText(displayPool[i], mid, slice);
   }}
 
   // inner circle last
@@ -436,7 +441,7 @@ if df is not None:
     st.divider()
     st.header("🎰 Spin the Wheel")
 
-    # Prepare aligned lists for the wheel:
+    # Prepare aligned lists:
     #   full_entries -> "Name - Email - Phone"
     #   display_names -> Name only (before first " - ")
     full_entries = out_df["Entry"].fillna("").astype(str).tolist()
