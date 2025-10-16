@@ -29,6 +29,7 @@ def build_entries(df: pd.DataFrame, id_value: str = "6610", separator: str = " -
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]  # normalize headers
 
+    # Validate required columns
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         return (
@@ -89,13 +90,16 @@ def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
     buf.seek(0)
     return buf.read()
 
-# ---------- Pretty wheel (JS) ----------
+# ---------- Pretty wheel (JS with CDN fallbacks + guards) ----------
 def render_pretty_wheel(labels):
     """
     Returns an HTML string that renders a polished wheel using GSAP + Winwheel.
-    'labels' should include duplicates so ticket counts map to probability.
+    - Disables Spin when no labels.
+    - Tries multiple CDNs; shows a warning if scripts can't load.
     """
-    labels_json = json.dumps(labels)  # safe for JS consumption
+    # Keep duplicates so ticket counts = probability
+    labels_json = json.dumps([str(x) for x in labels if str(x).strip() != ""])
+    disabled_attr = "disabled" if len(labels) == 0 else ""
 
     return f"""
 <!DOCTYPE html>
@@ -106,7 +110,7 @@ def render_pretty_wheel(labels):
   body {{ margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }}
   .wrap {{ display:flex; flex-direction:column; align-items:center; gap:14px; padding:8px; }}
   #wheel {{ position:relative; width:520px; height:520px; }}
-  #wheel canvas {{ width:520px; height:520px; }}
+  #wheel canvas {{ width:520px; height:520px; background:#fff; }}
   .pointer {{
     position:absolute; left:50%; top:-6px; transform:translateX(-50%);
     width:0; height:0; border-left:14px solid transparent; border-right:14px solid transparent;
@@ -117,7 +121,8 @@ def render_pretty_wheel(labels):
     font-weight:600; cursor:pointer;
   }}
   .btn:disabled {{ background:#9AA0A6; cursor:not-allowed; }}
-  .winner {{ font-weight:700; }}
+  .winner {{ font-weight:700; min-height:1.5em; }}
+  .warn {{ color:#B45309; font-size:0.95rem; }}
 </style>
 </head>
 <body>
@@ -127,79 +132,118 @@ def render_pretty_wheel(labels):
     <canvas id="wheelCanvas" width="520" height="520"></canvas>
   </div>
   <div>
-    <button id="spinBtn" class="btn">Spin 🎯</button>
+    <button id="spinBtn" class="btn" {disabled_attr}>Spin 🎯</button>
     <button id="resetBtn" class="btn" style="background:#6B7280;margin-left:8px;">Reset</button>
   </div>
   <div id="winner" class="winner"></div>
+  <div id="msg" class="warn"></div>
 </div>
 
-<!-- GSAP TweenMax + Winwheel from CDNs -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.3/TweenMax.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/winwheel@2.7.0/Winwheel.min.js"></script>
 <script>
   const labels = {labels_json};
+
+  // -------- script loader with fallbacks --------
+  function loadScript(src) {{
+    return new Promise((resolve) => {{
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = () => resolve(true);
+      s.onerror = () => resolve(false);
+      document.head.appendChild(s);
+    }});
+  }}
+
+  async function loadLibs() {{
+    const gsapSrcs = [
+      "https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.3/TweenMax.min.js",
+      "https://unpkg.com/gsap@1.20.3/TweenMax.min.js"
+    ];
+    const wheelSrcs = [
+      "https://cdn.jsdelivr.net/npm/winwheel@2.7.0/Winwheel.min.js",
+      "https://unpkg.com/winwheel@2.7.0/Winwheel.min.js"
+    ];
+
+    let gsapOk = false;
+    for (const s of gsapSrcs) {{ gsapOk = await loadScript(s); if (gsapOk) break; }}
+
+    let wheelOk = false;
+    for (const s of wheelSrcs) {{ wheelOk = await loadScript(s); if (wheelOk) break; }}
+
+    return gsapOk && wheelOk;
+  }}
 
   function pastel(i) {{
     const hue = (i * 137.508) % 360; // golden angle spacing
     return "hsl(" + hue + ", 70%, 60%)";
   }}
 
-  const segments = labels.map((t, i) => ({{ fillStyle: pastel(i), text: t }}));
+  function initWheel() {{
+    const segments = labels.map((t, i) => ({{ fillStyle: pastel(i), text: t }}));
+    let theWheel = new Winwheel({{
+      'numSegments': segments.length,
+      'outerRadius': 240,
+      'textFontSize': 14,
+      'textMargin': 6,
+      'segments': segments,
+      'animation':
+      {{
+        'type': 'spinToStop',
+        'duration': 6,
+        'spins': 8,
+        'easing': 'Power4.easeOut',
+        'callbackFinished': 'showWinner()',
+      }}
+    }});
 
-  let theWheel = new Winwheel({{
-    'numSegments': segments.length,
-    'outerRadius': 240,
-    'textFontSize': 14,
-    'textMargin': 6,
-    'segments': segments,
-    'animation':
-    {{
-      'type': 'spinToStop',
-      'duration': 6,
-      'spins': 8,
-      'easing': 'Power4.easeOut',
-      'callbackFinished': 'showWinner()',
-      'callbackAfter': 'drawPointer()'
+    const canvas = document.getElementById('wheelCanvas');
+    const winnerEl = document.getElementById('winner');
+    const spinBtn = document.getElementById('spinBtn');
+    const resetBtn = document.getElementById('resetBtn');
+
+    function showWinner() {{
+      const seg = theWheel.getIndicatedSegment();
+      winnerEl.textContent = '🏆 Winner: ' + (seg && seg.text ? seg.text : '—');
     }}
-  }});
+    window.showWinner = showWinner; // expose for callback
 
-  const canvas = document.getElementById('wheelCanvas');
-  const winnerEl = document.getElementById('winner');
-  const spinBtn = document.getElementById('spinBtn');
-  const resetBtn = document.getElementById('resetBtn');
+    spinBtn.addEventListener('click', () => {{
+      if (theWheel.numSegments === 0) return;
+      winnerEl.textContent = '';
+      spinBtn.disabled = true;
+      const stopAt = Math.floor(Math.random() * 360);
+      theWheel.stopAnimation(false);
+      theWheel.animation.stopAngle = stopAt;
+      theWheel.startAnimation();
+      setTimeout(() => spinBtn.disabled = false, (theWheel.animation.duration + 0.5) * 1000);
+    }});
 
-  function drawPointer() {{
-    const ctx = canvas.getContext('2d');
-    ctx.save();
-    ctx.translate(canvas.width/2, canvas.height/2);
-    ctx.restore();
-  }}
+    resetBtn.addEventListener('click', () => {{
+      winnerEl.textContent = '';
+      theWheel.stopAnimation(false);
+      theWheel.rotationAngle = 0;
+      theWheel.draw();
+    }});
 
-  function showWinner() {{
-    const seg = theWheel.getIndicatedSegment();
-    winnerEl.textContent = '🏆 Winner: ' + (seg && seg.text ? seg.text : '—');
-  }}
-
-  spinBtn.addEventListener('click', () => {{
-    if (theWheel.numSegments === 0) return;
-    winnerEl.textContent = '';
-    spinBtn.disabled = true;
-    const stopAt = Math.floor(Math.random() * 360); // random end angle
-    theWheel.stopAnimation(false);
-    theWheel.animation.stopAngle = stopAt;
-    theWheel.startAnimation();
-    setTimeout(() => spinBtn.disabled = false, (theWheel.animation.duration + 0.5) * 1000);
-  }});
-
-  resetBtn.addEventListener('click', () => {{
-    winnerEl.textContent = '';
-    theWheel.stopAnimation(false);
-    theWheel.rotationAngle = 0;
     theWheel.draw();
-  }});
 
-  theWheel.draw();
-  drawPointer();
+    if (theWheel.numSegments === 0) {{
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#666';
+      ctx.font = '16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('No entries loaded', canvas.width/2, canvas.height/2);
+    }}
+  }}
+
+  (async () => {{
+    const ok = await loadLibs();
+    if (!ok) {{
+      document.getElementById('msg').textContent =
+        "Could not load animation libraries (CDN blocked?). Try disabling ad blockers or a different network.";
+      return;
+    }}
+    initWheel();
+  }})();
 </script>
 </body>
 </html>
@@ -222,7 +266,7 @@ df = None
 
 if uploaded is not None:
     try:
-        # Allow the user to choose the sheet
+        # Choose the sheet
         xls = pd.ExcelFile(uploaded, engine="openpyxl")
         sheet_name = st.selectbox("Select worksheet", options=xls.sheet_names, index=0)
         df = pd.read_excel(xls, sheet_name=sheet_name, dtype=str, engine="openpyxl")
@@ -258,7 +302,6 @@ if df is not None:
         file_name="raffle_entries.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-
     csv_bytes = out_df.to_csv(index=False, header=include_header).encode("utf-8")
     st.download_button(
         label="⬇️ Download CSV (.csv)",
@@ -270,8 +313,9 @@ if df is not None:
     st.divider()
     st.header("🎰 Spin the Wheel (pretty animation)")
 
-    # Use duplicates so probability matches ticket counts
     labels_for_wheel = out_df["Entry"].dropna().astype(str).tolist()
-    st_html(render_pretty_wheel(labels_for_wheel), height=650)
+    if len(labels_for_wheel) == 0:
+        st.warning("No entries to spin. Check the ID filter and that Tickets Purchased > 0.")
+    st_html(render_pretty_wheel(labels_for_wheel), height=720)
 
 st.caption("Required headers: ID1, Full Name, Email1, Phone Number, Tickets Purchased.")
