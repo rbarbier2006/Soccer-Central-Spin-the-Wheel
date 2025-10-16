@@ -90,14 +90,12 @@ def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
     buf.seek(0)
     return buf.read()
 
-# ---------- Pretty wheel (JS with CDN fallbacks + guards) ----------
-def render_pretty_wheel(labels):
+# ---------- Pure-JS wheel (no external libraries) ----------
+def render_pure_wheel(labels):
     """
-    Returns an HTML string that renders a polished wheel using GSAP + Winwheel.
-    - Disables Spin when no labels.
-    - Tries multiple CDNs; shows a warning if scripts can't load.
+    Returns an HTML string that renders a spinning wheel using plain Canvas + requestAnimationFrame.
+    No external JS/CDNs required. Keeps duplicates so ticket counts = probability.
     """
-    # Keep duplicates so ticket counts = probability
     labels_json = json.dumps([str(x) for x in labels if str(x).strip() != ""])
     disabled_attr = "disabled" if len(labels) == 0 else ""
 
@@ -122,133 +120,138 @@ def render_pretty_wheel(labels):
   }}
   .btn:disabled {{ background:#9AA0A6; cursor:not-allowed; }}
   .winner {{ font-weight:700; min-height:1.5em; }}
-  .warn {{ color:#B45309; font-size:0.95rem; }}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div id="wheel">
     <div class="pointer"></div>
-    <canvas id="wheelCanvas" width="520" height="520"></canvas>
+    <canvas id="c" width="520" height="520"></canvas>
   </div>
   <div>
-    <button id="spinBtn" class="btn" {disabled_attr}>Spin 🎯</button>
-    <button id="resetBtn" class="btn" style="background:#6B7280;margin-left:8px;">Reset</button>
+    <button id="spin" class="btn" {disabled_attr}>Spin 🎯</button>
+    <button id="reset" class="btn" style="background:#6B7280;margin-left:8px;">Reset</button>
   </div>
   <div id="winner" class="winner"></div>
-  <div id="msg" class="warn"></div>
 </div>
 
 <script>
-  const labels = {labels_json};
+const labels = {labels_json};
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const CX = W/2, CY = H/2, R = Math.min(W, H)*0.46;
+const innerR = R*0.3;
+const n = labels.length;
+const twoPi = Math.PI * 2;
 
-  // -------- script loader with fallbacks --------
-  function loadScript(src) {{
-    return new Promise((resolve) => {{
-      const s = document.createElement('script');
-      s.src = src;
-      s.onload = () => resolve(true);
-      s.onerror = () => resolve(false);
-      document.head.appendChild(s);
-    }});
+let angle = 0;           // current rotation (radians)
+let spinning = false;
+
+function pastel(i) {{
+  const hue = (i * 137.508) % 360;
+  return `hsl(${hue},70%,60%)`;
+}}
+
+function drawWheel(a) {{
+  ctx.clearRect(0,0,W,H);
+  if (n === 0) {{
+    ctx.fillStyle = '#666';
+    ctx.font = '16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No entries loaded', CX, CY);
+    return;
+  }}
+  const slice = twoPi / n;
+
+  // draw slices
+  for (let i=0; i<n; i++) {{
+    const start = a + i*slice;
+    const end   = a + (i+1)*slice;
+    ctx.beginPath();
+    ctx.moveTo(CX, CY);
+    ctx.arc(CX, CY, R, start, end);
+    ctx.closePath();
+    ctx.fillStyle = pastel(i);
+    ctx.fill();
+
+    // label
+    const mid = (start + end) / 2;
+    const rx = CX + Math.cos(mid) * (R*0.78);
+    const ry = CY + Math.sin(mid) * (R*0.78);
+    ctx.save();
+    ctx.translate(rx, ry);
+    ctx.rotate(mid + Math.PI/2); // keep text readable
+    ctx.fillStyle = '#111';
+    ctx.font = '14px sans-serif';
+    const text = (labels[i].length <= 28) ? labels[i] : labels[i].slice(0,25) + '...';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, 0, 5);
+    ctx.restore();
   }}
 
-  async function loadLibs() {{
-    const gsapSrcs = [
-      "https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.3/TweenMax.min.js",
-      "https://unpkg.com/gsap@1.20.3/TweenMax.min.js"
-    ];
-    const wheelSrcs = [
-      "https://cdn.jsdelivr.net/npm/winwheel@2.7.0/Winwheel.min.js",
-      "https://unpkg.com/winwheel@2.7.0/Winwheel.min.js"
-    ];
+  // inner circle
+  ctx.beginPath();
+  ctx.arc(CX, CY, innerR, 0, twoPi);
+  ctx.fillStyle = '#fff';
+  ctx.fill();
+}}
 
-    let gsapOk = false;
-    for (const s of gsapSrcs) {{ gsapOk = await loadScript(s); if (gsapOk) break; }}
+function easeOutCubic(t) {{ return 1 - Math.pow(1 - t, 3); }}
 
-    let wheelOk = false;
-    for (const s of wheelSrcs) {{ wheelOk = await loadScript(s); if (wheelOk) break; }}
+function pickWinnerIndex() {{
+  return Math.floor(Math.random() * n);
+}}
 
-    return gsapOk && wheelOk;
-  }}
+function targetAngleForIndex(idx, spins=6) {{
+  // We want the center of the winner slice to end at the top pointer (-π/2).
+  const slice = twoPi / n;
+  const center = (idx + 0.5) * slice;   // center of slice in wheel coords
+  let rot = -Math.PI/2 - center;        // align center to top
+  rot += spins * twoPi;                  // add full spins
+  return rot;
+}}
 
-  function pastel(i) {{
-    const hue = (i * 137.508) % 360; // golden angle spacing
-    return "hsl(" + hue + ", 70%, 60%)";
-  }}
+function spin() {{
+  if (spinning || n === 0) return;
+  spinning = true;
+  document.getElementById('winner').textContent = '';
 
-  function initWheel() {{
-    const segments = labels.map((t, i) => ({{ fillStyle: pastel(i), text: t }}));
-    let theWheel = new Winwheel({{
-      'numSegments': segments.length,
-      'outerRadius': 240,
-      'textFontSize': 14,
-      'textMargin': 6,
-      'segments': segments,
-      'animation':
-      {{
-        'type': 'spinToStop',
-        'duration': 6,
-        'spins': 8,
-        'easing': 'Power4.easeOut',
-        'callbackFinished': 'showWinner()',
-      }}
-    }});
+  const winnerIdx = pickWinnerIndex();
+  const start = angle;
+  const end = targetAngleForIndex(winnerIdx, 6);
+  const duration = 5000; // ms
+  const t0 = performance.now();
 
-    const canvas = document.getElementById('wheelCanvas');
-    const winnerEl = document.getElementById('winner');
-    const spinBtn = document.getElementById('spinBtn');
-    const resetBtn = document.getElementById('resetBtn');
-
-    function showWinner() {{
-      const seg = theWheel.getIndicatedSegment();
-      winnerEl.textContent = '🏆 Winner: ' + (seg && seg.text ? seg.text : '—');
+  function frame(t) {{
+    const p = Math.min(1, (t - t0) / duration);
+    const k = easeOutCubic(p);
+    angle = start + (end - start) * k;
+    drawWheel(angle);
+    if (p < 1) {{
+      requestAnimationFrame(frame);
+    }} else {{
+      spinning = false;
+      const winner = labels[winnerIdx] || '';
+      document.getElementById('winner').textContent = '🏆 Winner: ' + winner;
     }}
-    window.showWinner = showWinner; // expose for callback
-
-    spinBtn.addEventListener('click', () => {{
-      if (theWheel.numSegments === 0) return;
-      winnerEl.textContent = '';
-      spinBtn.disabled = true;
-      const stopAt = Math.floor(Math.random() * 360);
-      theWheel.stopAnimation(false);
-      theWheel.animation.stopAngle = stopAt;
-      theWheel.startAnimation();
-      setTimeout(() => spinBtn.disabled = false, (theWheel.animation.duration + 0.5) * 1000);
-    }});
-
-    resetBtn.addEventListener('click', () => {{
-      winnerEl.textContent = '';
-      theWheel.stopAnimation(false);
-      theWheel.rotationAngle = 0;
-      theWheel.draw();
-    }});
-
-    theWheel.draw();
-
-    if (theWheel.numSegments === 0) {{
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#666';
-      ctx.font = '16px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('No entries loaded', canvas.width/2, canvas.height/2);
-    }}
   }}
+  requestAnimationFrame(frame);
+}}
 
-  (async () => {{
-    const ok = await loadLibs();
-    if (!ok) {{
-      document.getElementById('msg').textContent =
-        "Could not load animation libraries (CDN blocked?). Try disabling ad blockers or a different network.";
-      return;
-    }}
-    initWheel();
-  }})();
+document.getElementById('spin').addEventListener('click', spin);
+document.getElementById('reset').addEventListener('click', () => {{
+  angle = 0;
+  drawWheel(angle);
+  document.getElementById('winner').textContent = '';
+}});
+
+// initial draw
+drawWheel(angle);
 </script>
 </body>
 </html>
 """
-
 # ---------- UI ----------
 st.title("🎟️ Raffle Entries Builder")
 st.write(
@@ -266,7 +269,6 @@ df = None
 
 if uploaded is not None:
     try:
-        # Choose the sheet
         xls = pd.ExcelFile(uploaded, engine="openpyxl")
         sheet_name = st.selectbox("Select worksheet", options=xls.sheet_names, index=0)
         df = pd.read_excel(xls, sheet_name=sheet_name, dtype=str, engine="openpyxl")
@@ -311,11 +313,11 @@ if df is not None:
     )
 
     st.divider()
-    st.header("🎰 Spin the Wheel (pretty animation)")
+    st.header("🎰 Spin the Wheel")
 
     labels_for_wheel = out_df["Entry"].dropna().astype(str).tolist()
     if len(labels_for_wheel) == 0:
         st.warning("No entries to spin. Check the ID filter and that Tickets Purchased > 0.")
-    st_html(render_pretty_wheel(labels_for_wheel), height=720)
+    st_html(render_pure_wheel(labels_for_wheel), height=720)
 
 st.caption("Required headers: ID1, Full Name, Email1, Phone Number, Tickets Purchased.")
