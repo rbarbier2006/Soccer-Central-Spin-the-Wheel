@@ -22,10 +22,6 @@ def clean_cell(x):
     return str(x).strip()
 
 def build_entries(df: pd.DataFrame, id_value: str = "6610", separator: str = " - "):
-    """
-    Returns (entries_df, diagnostics_dict).
-    entries_df has one column 'Entry' with repeated rows by Tickets Purchased.
-    """
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]  # normalize headers
 
@@ -93,15 +89,14 @@ def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
 # ---------- Pure-JS wheel (no external libraries) ----------
 def render_pure_wheel(display_labels, full_labels):
     """
-    Returns HTML for a spinning wheel using plain Canvas + requestAnimationFrame.
-    - display_labels: what appears on the wheel (names only; duplicates allowed)
-    - full_labels: full entry for each slice (aligned 1:1 with display_labels)
-    - Pointer sits on the RIGHT, pointing left into the wheel; the slice touching it wins.
-    - Spin always does a long, smooth spin.
-    - Buttons:
-        * Eliminate Winner (1 slice)  -> removes only the exact slice that won
-        * Eliminate All (same name)   -> removes all slices with that displayed name
-        * Reset                       -> restores original pool
+    HTML wheel (Canvas + requestAnimationFrame).
+    - display_labels: names for the slices (duplicates allowed).
+    - full_labels: full entries aligned to display_labels.
+    - Pointer on RIGHT; slice under the pointer wins.
+    - Triangle is flipped 180° (visual only).
+    - Text starts at inner circle and runs outward along the radius.
+    - After a spin: 'Eliminate Winner (1 slice)' removes that exact slice,
+      'Eliminate All (same name)' removes all slices with that name.
     """
     display_json = json.dumps([str(x) for x in display_labels])
     full_json = json.dumps([str(x) for x in full_labels])
@@ -117,9 +112,9 @@ def render_pure_wheel(display_labels, full_labels):
   .wrap {{ display:flex; flex-direction:column; align-items:center; gap:16px; padding:8px; }}
   #wheel {{ position:relative; width:560px; height:560px; }}
   #wheel canvas {{ width:560px; height:560px; background:#fff; border-radius:50%; }}
-  /* RIGHT-side pointer, pointing LEFT into the wheel */
+  /* RIGHT-side pointer; flipped 180° */
   .pointer {{
-    position:absolute; right:-2px; top:50%; transform:translateY(-50%);
+    position:absolute; right:-2px; top:50%; transform:translateY(-50%) rotate(180deg);
     width:0; height:0; border-top:14px solid transparent; border-bottom:14px solid transparent;
     border-left:26px solid #444; filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));
   }}
@@ -154,22 +149,21 @@ def render_pure_wheel(display_labels, full_labels):
 </div>
 
 <script>
-const origDisplay = {display_json};  // names shown on wheel
-const origFull    = {full_json};     // full entries, aligned to names
+const origDisplay = {display_json};
+const origFull    = {full_json};
 
 let displayPool = origDisplay.slice();
 let fullPool    = origFull.slice();
 
-let lastWinnerIndex = null;  // exact slice index that won
+let lastWinnerIndex = null;
 
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const W = canvas.width, H = canvas.height;
 const CX = W/2, CY = H/2, R = Math.min(W, H)*0.46;
-const innerR = R*0.3;              // inner hole (where labels start "from center")
+const innerR = R*0.30;   // size of inner hole
 const twoPi = Math.PI * 2;
 
-// Controls
 const spinBtn = document.getElementById('spin');
 const resetBtn = document.getElementById('reset');
 const remove1Btn = document.getElementById('remove1');
@@ -177,18 +171,53 @@ const removeAllBtn = document.getElementById('removeAll');
 const winnerEl = document.getElementById('winner');
 const countEl = document.getElementById('count');
 
-let angle = 0;           // current rotation (radians)
+let angle = 0;
 let spinning = false;
 
-// Utility
 function updateCount() {{
   countEl.textContent = displayPool.length + " slice" + (displayPool.length===1?"":"s") + " on wheel";
 }}
 updateCount();
 
 function pastel(i) {{
-  const hue = (i * 137.508) % 360;    // good spread
+  const hue = (i * 137.508) % 360;
   return 'hsl(' + hue + ',70%,60%)';
+}}
+
+function drawRadialText(text, midAngle) {{
+  // Start slightly outside the inner circle, draw text OUTWARD along the radius.
+  ctx.save();
+  ctx.translate(CX, CY);
+
+  // Keep text upright: if on the left half, rotate 180° and right-align.
+  let rot = midAngle;
+  let align = 'left';
+  if (Math.cos(midAngle) < 0) {{
+    rot += Math.PI;
+    align = 'right';
+  }}
+  ctx.rotate(rot);
+  ctx.fillStyle = '#111';
+  ctx.font = '14px sans-serif';
+  ctx.textAlign = align;
+  ctx.textBaseline = 'middle';
+
+  const startR = innerR + 10;           // where text begins (near center)
+  const endR   = R * 0.90;              // how far out text can go
+  const maxW   = endR - startR;
+
+  // Truncate to fit if needed (simple width-based ellipsis)
+  let show = text;
+  const w = ctx.measureText(show).width;
+  if (w > maxW) {{
+    // rough average width fallback if needed
+    const avg = 7;
+    const maxChars = Math.max(3, Math.floor(maxW / avg));
+    show = show.length > maxChars ? show.slice(0, maxChars - 1) + '…' : show;
+  }}
+
+  ctx.fillText(show, startR, 0);  // along +x (radial outward)
+  ctx.restore();
 }}
 
 function drawWheel(a) {{
@@ -201,11 +230,13 @@ function drawWheel(a) {{
     ctx.fillText('No entries loaded', CX, CY);
     return;
   }}
+
   const slice = twoPi / n;
 
   for (let i=0; i<n; i++) {{
     const start = a + i*slice;
     const end   = a + (i+1)*slice;
+    const mid   = (start + end) / 2;
 
     // wedge
     ctx.beginPath();
@@ -215,21 +246,8 @@ function drawWheel(a) {{
     ctx.fillStyle = pastel(i);
     ctx.fill();
 
-    // label: start "from the center" (just outside inner circle), radial orientation
-    const mid = (start + end) / 2;
-    const labelR = innerR + (R - innerR) * 0.22; // closer to center like your screenshot
-    const rx = CX + Math.cos(mid) * labelR;
-    const ry = CY + Math.sin(mid) * labelR;
-    ctx.save();
-    ctx.translate(rx, ry);
-    ctx.rotate(mid + Math.PI/2);
-    ctx.fillStyle = '#111';
-    ctx.font = '14px sans-serif';
-    const text = displayPool[i];
-    const show = (text.length <= 26) ? text : text.slice(0,23) + '...';
-    ctx.textAlign = 'center';
-    ctx.fillText(show, 0, 5);
-    ctx.restore();
+    // radial label from inner circle outward
+    drawRadialText(displayPool[i], mid);
   }}
 
   // inner circle
@@ -239,16 +257,15 @@ function drawWheel(a) {{
   ctx.fill();
 }}
 
-// Easing + angle math
 function easeOutCubic(t) {{ return 1 - Math.pow(1 - t, 3); }}
 function modTau(x) {{ const t = twoPi; x = x % t; return x < 0 ? x + t : x; }}
 
-// Pointer sits at angle 0 (right). Align center of slice to angle 0.
+// Pointer is at angle 0 (to the RIGHT). Align center of slice to angle 0.
 function targetAngleForIndex(idx) {{
   const n = displayPool.length;
   const slice = twoPi / n;
   const center = (idx + 0.5) * slice;
-  return 0 - center;  // pointerAngle(=0) - center
+  return 0 - center;
 }}
 
 function spin() {{
@@ -262,14 +279,14 @@ function spin() {{
   const n = displayPool.length;
   const idx = Math.floor(Math.random() * n);
 
-  // Always a long, satisfying spin
+  // Always long spin
   const baseTarget = targetAngleForIndex(idx);
   const start = angle;
   const deltaBase = modTau(baseTarget - modTau(start));
-  const fullSpins = 6 * twoPi;              // 6 full spins every time
+  const fullSpins = 6 * twoPi;
   const end = start + deltaBase + fullSpins;
 
-  const duration = 5000; // ms
+  const duration = 5000;
   const t0 = performance.now();
 
   function frame(t) {{
@@ -282,7 +299,7 @@ function spin() {{
     }} else {{
       spinning = false;
       lastWinnerIndex = idx;
-      // Show FULL entry for the winner
+      // show FULL entry
       const full = fullPool[idx] || '';
       winnerEl.textContent = '🏆 Winner: ' + full;
       remove1Btn.disabled = false;
@@ -394,7 +411,7 @@ if df is not None:
     st.subheader("Preview of generated entries")
     st.dataframe(out_df.head(30), use_container_width=True)
 
-    # Downloads (use the full 'Entry' text)
+    # Downloads (full 'Entry' text)
     excel_bytes = to_excel_bytes(out_df, header=include_header)
     st.download_button(
         label="⬇️ Download Excel (.xlsx)",
@@ -413,14 +430,12 @@ if df is not None:
     st.divider()
     st.header("🎰 Spin the Wheel")
 
-    # Prepare aligned lists:
-    #   full_entries -> full "Name - Email - Phone" per slice
-    #   display_names -> just the name (text before first " - ") per slice
+    # Align lists: display (name only), full (full entry)
     full_entries = out_df["Entry"].fillna("").astype(str).tolist()
     display_names = [s.split(" - ")[0] for s in full_entries]
 
     if len(display_names) == 0:
         st.warning("No entries to spin. Check the ID filter and that Tickets Purchased > 0.")
-    st_html(render_pure_wheel(display_names, full_entries), height=800)
+    st_html(render_pure_wheel(display_names, full_entries), height=820)
 
 st.caption("Required headers: ID1, Full Name, Email1, Phone Number, Tickets Purchased.")
