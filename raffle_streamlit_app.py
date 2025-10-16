@@ -99,6 +99,7 @@ def render_pure_wheel(labels):
     labels_json = json.dumps([str(x) for x in labels if str(x).strip() != ""])
     disabled_attr = "disabled" if len(labels) == 0 else ""
 
+    # NOTE: Avoid JS backtick ${...} here, since this is a Python f-string.
     return f"""
 <!DOCTYPE html>
 <html>
@@ -150,7 +151,7 @@ let spinning = false;
 
 function pastel(i) {{
   const hue = (i * 137.508) % 360;
-  return `hsl(${hue},70%,60%)`;
+  return 'hsl(' + hue + ',70%,60%)';  // <-- no JS template string to avoid Python f-string conflicts
 }}
 
 function drawWheel(a) {{
@@ -181,7 +182,7 @@ function drawWheel(a) {{
     const ry = CY + Math.sin(mid) * (R*0.78);
     ctx.save();
     ctx.translate(rx, ry);
-    ctx.rotate(mid + Math.PI/2); // keep text readable
+    ctx.rotate(mid + Math.PI/2);
     ctx.fillStyle = '#111';
     ctx.font = '14px sans-serif';
     const text = (labels[i].length <= 28) ? labels[i] : labels[i].slice(0,25) + '...';
@@ -204,11 +205,10 @@ function pickWinnerIndex() {{
 }}
 
 function targetAngleForIndex(idx, spins=6) {{
-  // We want the center of the winner slice to end at the top pointer (-π/2).
   const slice = twoPi / n;
-  const center = (idx + 0.5) * slice;   // center of slice in wheel coords
-  let rot = -Math.PI/2 - center;        // align center to top
-  rot += spins * twoPi;                  // add full spins
+  const center = (idx + 0.5) * slice;
+  let rot = -Math.PI/2 - center;     // align center to top
+  rot += spins * twoPi;               // add full spins
   return rot;
 }}
 
