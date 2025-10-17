@@ -16,10 +16,12 @@ REQUIRED_COLUMNS = {
     "Tickets Purchased": "R",
 }
 
+
 def clean_cell(x):
     if pd.isna(x):
         return ""
     return str(x).strip()
+
 
 def build_entries(df: pd.DataFrame, id_value: str = "6610", separator: str = " - "):
     """
@@ -37,7 +39,7 @@ def build_entries(df: pd.DataFrame, id_value: str = "6610", separator: str = " -
             {
                 "ok": False,
                 "message": "Missing required column(s): "
-                           + ", ".join([f"{c} (expected in column {REQUIRED_COLUMNS[c]})" for c in missing]),
+                + ", ".join([f"{c} (expected in column {REQUIRED_COLUMNS[c]})" for c in missing]),
             },
         )
 
@@ -62,8 +64,8 @@ def build_entries(df: pd.DataFrame, id_value: str = "6610", separator: str = " -
     # Build "Full Name - Email1 - Phone Number"
     combined = filtered.apply(
         lambda r: f"{clean_cell(r['Full Name'])}{separator}"
-                  f"{clean_cell(r['Email1'])}{separator}"
-                  f"{clean_cell(r['Phone Number'])}",
+        f"{clean_cell(r['Email1'])}{separator}"
+        f"{clean_cell(r['Phone Number'])}",
         axis=1,
     ).astype(str)
 
@@ -83,6 +85,7 @@ def build_entries(df: pd.DataFrame, id_value: str = "6610", separator: str = " -
     }
     return out_df, info
 
+
 def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -90,22 +93,25 @@ def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
     buf.seek(0)
     return buf.read()
 
+
 # ---------- Pure-JS wheel (no external libraries) ----------
 def render_pure_wheel(display_labels, full_labels):
     """
-    HTML wheel (Canvas + requestAnimationFrame) with label clipping.
-    - display_labels: names shown on slices (duplicates allowed).
-    - full_labels: full entries aligned 1:1 with display_labels.
-    - Pointer on RIGHT (triangle flipped); slice under the pointer wins.
-    - Labels are clipped to their wedge so they never spill outside the slice.
-      Font size auto-fits to the slice arc length.
+    HTML wheel (Canvas + requestAnimationFrame) with label clipping + auto-fit.
+    - display_labels: names shown on slices (duplicates allowed for weighting)
+    - full_labels: full entries aligned 1:1 with display_labels
+    - Pointer on RIGHT (triangle flipped) — slice under the pointer wins
+    - Labels:
+        * clipped to their wedge (never overflow)
+        * auto-fit font size to arc length
+        * fallback to radial text when slice is too thin
     - Buttons:
-        * Eliminate Winner (1 slice) -> removes that exact slice
-        * Eliminate All (same name)  -> removes all slices with that name
-        * Reset -> restores original pool
+        * Eliminate Winner (1 slice)
+        * Eliminate All (same name)
+        * Reset (restore original pool)
     """
     display_json = json.dumps([str(x) for x in display_labels])
-    full_json    = json.dumps([str(x) for x in full_labels])
+    full_json = json.dumps([str(x) for x in full_labels])
     disabled_attr = "disabled" if len(display_labels) == 0 else ""
 
     return f"""
@@ -158,18 +164,15 @@ const origFull    = {full_json};
 
 let displayPool = origDisplay.slice();
 let fullPool    = origFull.slice();
-
 let lastWinnerIndex = null;
 
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const W = canvas.width, H = canvas.height;
 const CX = W/2, CY = H/2, R = Math.min(W, H)*0.46;
-const innerR = R*0.30;   // inner hole radius
+const innerR = R*0.30;                // inner hole radius
+const labelR = innerR + (R - innerR) * 0.62;  // main label radius band
 const twoPi = Math.PI * 2;
-
-// label radius (mid band of the slice)
-const labelR = innerR + (R - innerR) * 0.60;
 
 const spinBtn = document.getElementById('spin');
 const resetBtn = document.getElementById('reset');
@@ -191,13 +194,15 @@ function pastel(i) {{
   return 'hsl(' + hue + ',70%,60%)';
 }}
 
-// Draw one label, clipped to its wedge, auto-fitting font size to the available arc.
-function drawLabelClipped(text, start, end) {{
+/* ---------- Label drawing helpers ---------- */
+
+// draw text tangent to arc at labelR, clipped to [start,end]
+function drawTangentialClipped(text, start, end) {{
   const mid = (start + end) / 2;
   const sliceAngle = end - start;
-  const maxArc = sliceAngle * labelR * 0.90; // 90% of arc length as width budget
+  const maxArc = sliceAngle * labelR * 0.92; // width budget along arc
 
-  // Create wedge clip
+  // Clip wedge
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(CX, CY);
@@ -205,26 +210,30 @@ function drawLabelClipped(text, start, end) {{
   ctx.closePath();
   ctx.clip();
 
-  // Rotate to tangent orientation at the slice centerline
+  // Orient tangent
   ctx.translate(CX, CY);
   let rot = mid + Math.PI/2;
-  // Keep text upright for readability (optional)
-  if (Math.sin(mid) < 0) rot += Math.PI;
+  if (Math.sin(mid) < 0) rot += Math.PI; // keep upright
   ctx.rotate(rot);
 
-  // Find font size that fits within available arc
+  // Auto-fit font
   let fontSize = 18;
   ctx.font = fontSize + 'px sans-serif';
   let width = ctx.measureText(text).width;
   if (width > maxArc) {{
-    fontSize = Math.max(10, Math.floor(fontSize * (maxArc / width)));
+    fontSize = Math.max(9, Math.floor(fontSize * (maxArc / width)));
     ctx.font = fontSize + 'px sans-serif';
+    width = ctx.measureText(text).width;
+  }}
+  // Truncate with ellipsis if still too wide
+  if (width > maxArc) {{
+    const avg = Math.max(6, Math.floor(width / text.length)); // px/char
+    const maxChars = Math.max(3, Math.floor(maxArc / avg));
+    text = text.length > maxChars ? text.slice(0, maxChars - 1) + '…' : text;
   }}
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-
-  // High-contrast outline + fill
   ctx.strokeStyle = 'rgba(255,255,255,0.9)';
   ctx.lineWidth = Math.max(2, Math.floor(fontSize/6));
   ctx.fillStyle = '#111';
@@ -233,7 +242,58 @@ function drawLabelClipped(text, start, end) {{
   ctx.fillText(text, labelR, 0);
 
   ctx.restore();
+}
+
+// draw text radial (along the radius) starting near innerR; clipped to [start,end]
+function drawRadialClipped(text, start, end) {{
+  const mid = (start + end) / 2;
+
+  // Clip wedge
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(CX, CY);
+  ctx.arc(CX, CY, R, start, end);
+  ctx.closePath();
+  ctx.clip();
+
+  // Orient radial
+  ctx.translate(CX, CY);
+  let rot = mid;
+  if (Math.cos(mid) < 0) rot += Math.PI; // keep upright
+  ctx.rotate(rot);
+
+  const startR = innerR + 10;
+  const endR   = R * 0.92;
+  const maxW   = (endR - startR) * 0.95;
+
+  // Auto-fit font
+  let fontSize = 18;
+  ctx.font = fontSize + 'px sans-serif';
+  let width = ctx.measureText(text).width;
+  if (width > maxW) {{
+    fontSize = Math.max(9, Math.floor(fontSize * (maxW / width)));
+    ctx.font = fontSize + 'px sans-serif';
+    width = ctx.measureText(text).width;
+  }}
+  if (width > maxW) {{
+    const avg = Math.max(6, Math.floor(width / text.length));
+    const maxChars = Math.max(3, Math.floor(maxW / avg));
+    text = text.length > maxChars ? text.slice(0, maxChars - 1) + '…' : text;
+  }}
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = Math.max(2, Math.floor(fontSize/6));
+  ctx.fillStyle = '#111';
+
+  ctx.strokeText(text, startR, 0);
+  ctx.fillText(text, startR, 0);
+
+  ctx.restore();
 }}
+
+/* ---------- Wheel drawing ---------- */
 
 function drawWheel(a) {{
   ctx.clearRect(0,0,W,H);
@@ -247,7 +307,7 @@ function drawWheel(a) {{
   }}
   const slice = twoPi / n;
 
-  // 1) Draw all wedges first
+  // 1) Draw all wedges
   for (let i=0; i<n; i++) {{
     const start = a + i*slice;
     const end   = a + (i+1)*slice;
@@ -259,14 +319,19 @@ function drawWheel(a) {{
     ctx.fill();
   }}
 
-  // 2) Draw all labels on top, each clipped to its wedge
+  // 2) Labels on top — tangent when arc wide enough, otherwise radial
   for (let i=0; i<n; i++) {{
     const start = a + i*slice;
     const end   = a + (i+1)*slice;
-    drawLabelClipped(displayPool[i], start, end);
+    const arcLen = (end - start) * labelR;
+    if (arcLen >= 26) {{
+      drawTangentialClipped(displayPool[i], start, end);
+    }} else {{
+      drawRadialClipped(displayPool[i], start, end);
+    }}
   }}
 
-  // 3) Draw inner circle last
+  // 3) Inner circle
   ctx.beginPath();
   ctx.arc(CX, CY, innerR, 0, twoPi);
   ctx.fillStyle = '#fff';
@@ -295,14 +360,12 @@ function spin() {{
   const n = displayPool.length;
   const idx = Math.floor(Math.random() * n);
 
-  // Always a long, smooth spin
   const baseTarget = targetAngleForIndex(idx);
   const start = angle;
   const deltaBase = modTau(baseTarget - modTau(start));
-  const fullSpins = 6 * twoPi;              // 6 spins every time
-  const end = start + deltaBase + fullSpins;
+  const end = start + deltaBase + 6 * twoPi;   // always 6 spins
 
-  const duration = 5000; // ms
+  const duration = 5000;
   const t0 = performance.now();
 
   function frame(t) {{
@@ -316,7 +379,7 @@ function spin() {{
       spinning = false;
       lastWinnerIndex = idx;
       const full = fullPool[idx] || '';
-      winnerEl.textContent = '🏆 Winner: ' + full;  // full entry
+      winnerEl.textContent = '🏆 Winner: ' + full;
       remove1Btn.disabled = false;
       removeAllBtn.disabled = false;
     }}
@@ -339,7 +402,7 @@ function resetWheel() {{
 function removeWinnerOne() {{
   if (lastWinnerIndex == null) return;
   if (lastWinnerIndex >= 0 && lastWinnerIndex < displayPool.length) {{
-    displayPool.splice(lastWinnerIndex, 1);  // exact slice only
+    displayPool.splice(lastWinnerIndex, 1);
     fullPool.splice(lastWinnerIndex, 1);
   }}
   lastWinnerIndex = null;
@@ -381,6 +444,7 @@ drawWheel(angle);
 </body>
 </html>
 """
+
 
 # ---------- UI ----------
 st.title("🎟️ Raffle Entries Builder")
