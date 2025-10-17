@@ -89,6 +89,7 @@ def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
     return buf.read()
 
 # ---------------- JS wheel renderer ----------------
+
 def render_wheel(display_names, full_entries):
     # config passed to JS
     init = {
@@ -147,9 +148,11 @@ function setupCanvas(){
   canvas.height = Math.floor(size * dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
 }
-setupCanvas(); window.addEventListener('resize', ()=>{ setupCanvas(); draw(rotation); });
+setupCanvas();
+window.addEventListener('resize', ()=>{ setupCanvas(); draw(rotation); });
 
-function hsv(i,n){ const h=(i/Math.max(1,n))%1,s=.75,v=.95;
+function hsv(i,n){
+  const h=(i/Math.max(1,n))%1,s=.75,v=.95;
   const f=h*6,p=v*(1-s),q=v*(1-(f%1)*s),t=v*(1-(1-f%1)*s),m=Math.floor(f)%6;
   const r=[v,q,p,p,t,v][m],g=[t,v,v,q,p,p][m],b=[p,p,t,v,v,q][m];
   return `rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
@@ -179,6 +182,7 @@ function draw(rot=0){
   for(let i=0;i<n;i++){
     const a1 = rot + i*slice, a2 = rot + (i+1)*slice, mid = (a1+a2)/2;
     const name = labels[i];
+
     // clip wedge
     ctx.save();
     ctx.beginPath(); ctx.moveTo(CX,CY); ctx.arc(CX,CY,R,a1,a2,false); ctx.closePath(); ctx.clip();
@@ -186,8 +190,11 @@ function draw(rot=0){
     ctx.save();
     ctx.translate(CX,CY);
     ctx.rotate(mid);
-    // keep upright
-    if (Math.cos(mid) < 0){ ctx.rotate(Math.PI); }
+
+    // keep upright; if flipped, also flip the anchor so it doesn't draw under the hub
+    const flipped = Math.cos(mid) < 0;
+    if (flipped) ctx.rotate(Math.PI);
+
     const maxW = (labelEnd - labelStart) * 0.95;
 
     // auto-fit
@@ -200,13 +207,17 @@ function draw(rot=0){
       w = ctx.measureText(name).width;
     }
 
-    ctx.textAlign = "left"; ctx.textBaseline = "middle";
-    ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = Math.max(2, Math.floor(font/6));
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    const x = flipped ? -labelStart : labelStart;   // <-- critical fix
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.lineWidth = Math.max(2, Math.floor(font/6));
     ctx.fillStyle = "#111";
-    ctx.strokeText(name, labelStart, 0);
-    ctx.fillText(name, labelStart, 0);
-    ctx.restore();
-    ctx.restore();
+    ctx.strokeText(name, x, 0);
+    ctx.fillText(name, x, 0);
+
+    ctx.restore();  // inner save
+    ctx.restore();  // clip save
   }
 
   // hub
@@ -244,20 +255,40 @@ function spin(){
   requestAnimationFrame(frame);
 }
 
-function setElims(dis){ document.getElementById('rm1').disabled = dis; document.getElementById('rmAll').disabled = dis; }
-function updateCount(){ document.getElementById('count').textContent = labels.length + " slice" + (labels.length===1?"":"s") + " on wheel"; }
+function setElims(dis){
+  document.getElementById('rm1').disabled = dis;
+  document.getElementById('rmAll').disabled = dis;
+}
+function updateCount(){
+  document.getElementById('count').textContent =
+    labels.length + " slice" + (labels.length===1?"":"s") + " on wheel";
+}
 
 document.getElementById('spinBtn').onclick = spin;
-document.getElementById('resetBtn').onclick = ()=>{ labels=[...INIT.labels]; fulls=[...INIT.fulls]; rotation=0; lastIdx=null; setElims(true); document.getElementById('winner').textContent=""; draw(rotation); updateCount(); };
-document.getElementById('pngBtn').onclick   = ()=>{ const a=document.createElement('a'); a.download="wheel.png"; a.href=canvas.toDataURL("image/png"); a.click(); };
-document.getElementById('rm1').onclick      = ()=>{ if(lastIdx==null)return; labels.splice(lastIdx,1); fulls.splice(lastIdx,1); lastIdx=null; setElims(true); draw(rotation); updateCount(); };
-document.getElementById('rmAll').onclick    = ()=>{ if(lastIdx==null)return; const n=labels[lastIdx]; const L=[],F=[]; for(let i=0;i<labels.length;i++){ if(labels[i]!==n){L.push(labels[i]);F.push(fulls[i]);} } labels=L; fulls=F; lastIdx=null; setElims(true); draw(rotation); updateCount(); };
+document.getElementById('resetBtn').onclick = ()=>{
+  labels=[...INIT.labels]; fulls=[...INIT.fulls]; rotation=0; lastIdx=null;
+  setElims(true); document.getElementById('winner').textContent="";
+  draw(rotation); updateCount();
+};
+document.getElementById('pngBtn').onclick = ()=>{
+  const a=document.createElement('a'); a.download="wheel.png"; a.href=canvas.toDataURL("image/png"); a.click();
+};
+document.getElementById('rm1').onclick = ()=>{
+  if(lastIdx==null)return;
+  labels.splice(lastIdx,1); fulls.splice(lastIdx,1);
+  lastIdx=null; setElims(true); draw(rotation); updateCount();
+};
+document.getElementById('rmAll').onclick = ()=>{
+  if(lastIdx==null)return;
+  const n=labels[lastIdx]; const L=[],F=[];
+  for(let i=0;i<labels.length;i++){ if(labels[i]!==n){L.push(labels[i]);F.push(fulls[i]);} }
+  labels=L; fulls=F; lastIdx=null; setElims(true); draw(rotation); updateCount();
+};
 
 draw(rotation); updateCount();
 </script>
 """
     return html.replace("__INIT_JSON__", json.dumps(init))
-
 
 # ---------------- UI ----------------
 st.title("🎟️ Raffle Entries Builder")
