@@ -90,326 +90,174 @@ def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
 
 # ---------------- JS wheel renderer ----------------
 def render_wheel(display_names, full_entries):
-    """
-    Canvas-based wheel with:
-     - names clipped inside wedges (auto-fit; fallback to radial on very thin slices),
-     - pointer on the RIGHT (triangle points into wheel) -> slice under it wins,
-     - buttons: eliminate winner (exact slice) and eliminate all (same name),
-     - winner line shows FULL entry (Name - Email - Phone).
-    No f-strings in HTML; JSON is injected via .replace().
-    """
+    # config passed to JS
     init = {
-        "labels": [str(x) for x in display_names],
-        "fulls":  [str(x) for x in full_entries],
+        "labels": [str(x) for x in display_names],   # names on slices
+        "fulls":  [str(x) for x in full_entries],    # full entry shown as winner
         "durationMs": 5000,
         "minSpins": 6,
         "maxSpins": 6
     }
 
-    html_template = """
-<div id="app" style="display:flex;flex-direction:column;align-items:center;gap:14px;">
+    html = """
+<div style="display:flex;flex-direction:column;align-items:center;gap:14px;">
   <h1 style="margin:0 0 8px 0;font-weight:800;font-size:28px;">🎰 Spin the Wheel</h1>
 
-  <div style="position:relative; width:560px; max-width:92vw;">
-    <!-- RIGHT pointer (triangle points left into the wheel) -->
-    <div style="position:absolute; right:-2px; top:50%; transform:translateY(-50%) rotate(180deg);
+  <div style="position:relative;width:560px;max-width:92vw;">
+    <!-- RIGHT pointer -->
+    <div style="position:absolute;right:-2px;top:50%;transform:translateY(-50%) rotate(180deg);
                 width:0;height:0;border-top:14px solid transparent;border-bottom:14px solid transparent;
-                border-left:26px solid #444; z-index:5; filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));">
-    </div>
+                border-left:26px solid #444;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));"></div>
     <canvas id="wheel" width="600" height="600"
-      style="width:100%;height:auto;border-radius:12px;display:block;background:radial-gradient(circle at 50% 50%, #fff, #f3f3f3 70%, #e9e9e9 100%);">
-    </canvas>
+            style="width:100%;height:auto;border-radius:12px;display:block;
+                   background:radial-gradient(circle at 50% 50%, #fff, #f3f3f3 70%, #e9e9e9 100%);"></canvas>
   </div>
 
   <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
-    <button id="spinBtn" style="padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#1f7ae0;color:white;font-weight:700;cursor:pointer;">🎯 Spin</button>
+    <button id="spinBtn"  style="padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#1f7ae0;color:#fff;font-weight:700;cursor:pointer;">🎯 Spin</button>
     <button id="resetBtn" style="padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#fafafa;cursor:pointer;">🔄 Reset</button>
-    <button id="remove1"  disabled style="padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#ef4444;color:#fff;cursor:pointer;">🗑️ Eliminate Winner</button>
-    <button id="removeAll" disabled style="padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#b91c1c;color:#fff;cursor:pointer;">🗑️ Eliminate All (same name)</button>
-    <button id="dlBtn" style="padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#fafafa;cursor:pointer;">⬇️ PNG</button>
+    <button id="rm1"     disabled style="padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#ef4444;color:#fff;cursor:pointer;">🗑️ Eliminate Winner</button>
+    <button id="rmAll"   disabled style="padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#b91c1c;color:#fff;cursor:pointer;">🗑️ Eliminate All (same name)</button>
+    <button id="pngBtn"  style="padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#fafafa;cursor:pointer;">⬇️ PNG</button>
   </div>
 
   <div id="winner" style="font-size:18px;font-weight:800;color:#0f5132;min-height:1.5em;"></div>
-  <div id="count" class="muted" style="color:#6B7280;"></div>
+  <div id="count"  style="color:#6B7280;"></div>
 </div>
 
 <script>
 const INIT = __INIT_JSON__;
 
-// --------- state ----------
-let labels = [...INIT.labels];      // display names (1 per slice)
-let fulls  = [...INIT.fulls];       // full entries (aligned 1:1)
-let rotationDeg = 0;
+let labels = [...INIT.labels];
+let fulls  = [...INIT.fulls];
+let rotation = 0;
 let spinning = false;
-let lastWinIdx = null;
+let lastIdx = null;
 
-const TAU = Math.PI * 2;
 const canvas = document.getElementById('wheel');
 const ctx = canvas.getContext('2d');
 
-function setupCanvas() {
+function setupCanvas(){
   const dpr = window.devicePixelRatio || 1;
-  const displaySize = canvas.getBoundingClientRect();
-  const size = Math.min(displaySize.width, 560);
+  const rect = canvas.getBoundingClientRect();
+  const size = Math.min(rect.width, 560);
   canvas.style.width = size + "px";
   canvas.style.height = size + "px";
   canvas.width = Math.floor(size * dpr);
   canvas.height = Math.floor(size * dpr);
-  ctx.setTransform(1,0,0,1,0,0);
-  ctx.scale(dpr, dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
 }
-setupCanvas();
-window.addEventListener('resize', ()=>{ setupCanvas(); drawWheel(rotationDeg); });
+setupCanvas(); window.addEventListener('resize', ()=>{ setupCanvas(); draw(rotation); });
 
-function hsv(i, n) {
-  const h = (i / Math.max(1,n)) % 1, s = 0.75, v = 0.95;
-  const f = h*6, p=v*(1-s), q=v*(1-(f%1)*s), t=v*(1-(1-f%1)*s), m = Math.floor(f) % 6;
-  const r=[v,q,p,p,t,v][m], g=[t,v,v,q,p,p][m], b=[p,p,t,v,v,q][m];
+function hsv(i,n){ const h=(i/Math.max(1,n))%1,s=.75,v=.95;
+  const f=h*6,p=v*(1-s),q=v*(1-(f%1)*s),t=v*(1-(1-f%1)*s),m=Math.floor(f)%6;
+  const r=[v,q,p,p,t,v][m],g=[t,v,v,q,p,p][m],b=[p,p,t,v,v,q][m];
   return `rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
 }
-function mod(a, n){ return ((a % n) + n) % n; }
-function clamp(x,min,max){ return Math.max(min, Math.min(max, x)); }
-function easeOutCubic(t){ return 1 - Math.pow(1 - t, 3); }
+function mod(a,n){return ((a%n)+n)%n}
+function easeOutCubic(t){return 1-Math.pow(1-t,3)}
 
-function drawWheel(rot=0) {
-  const rect = canvas.getBoundingClientRect();
-  const size = rect.width;
-  const cx = size/2, cy = size/2;
-  const R = size*0.46;
-  const hubR = R * 0.12;
-  const labelR = R * 0.62;
+function draw(rot=0){
+  const rect = canvas.getBoundingClientRect(), S = rect.width;
+  const CX=S/2, CY=S/2, R=S*0.46, innerR=R*0.18, labelStart=innerR+10, labelEnd=R*0.90;
 
-  ctx.clearRect(0,0,size,size);
+  ctx.clearRect(0,0,S,S);
 
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.scale(1, -1); // y up
+  const n = Math.max(1, labels.length), slice = 2*Math.PI/n;
 
-  // equal slices
-  const n = labels.length || 1;
-  const sliceDeg = 360 / n;
-
-  // Wedges
-  for (let i=0;i<n;i++){
-    const start = (i*sliceDeg) + rot;
-    const end   = ((i+1)*sliceDeg) + rot;
-    const t1 = start * Math.PI/180;
-    const t2 = end   * Math.PI/180;
-
-    ctx.beginPath();
-    ctx.moveTo(0,0);
-    ctx.arc(0,0,R,t1,t2,false);
-    ctx.closePath();
-    ctx.fillStyle = hsv(i,n);
-    ctx.fill();
-
+  // wedges
+  for(let i=0;i<n;i++){
+    const a1 = rot + i*slice, a2 = rot + (i+1)*slice;
+    ctx.beginPath(); ctx.moveTo(CX,CY); ctx.arc(CX,CY,R,a1,a2,false); ctx.closePath();
+    ctx.fillStyle = hsv(i,n); ctx.fill();
     // separator
-    ctx.beginPath();
-    ctx.arc(0,0,R,t1,t1+0.006,false);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "#fff";
-    ctx.stroke();
+    ctx.beginPath(); ctx.arc(CX,CY,R,a1,a1+0.006,false);
+    ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; ctx.stroke();
   }
 
-  // Labels (clipped to wedge; tangent if possible, else radial fallback)
-  for (let i=0;i<n;i++){
-    const start = (i*sliceDeg) + rot;
-    const end   = ((i+1)*sliceDeg) + rot;
-    const mid   = (start + end) / 2;
-    const t1 = start * Math.PI/180;
-    const t2 = end   * Math.PI/180;
+  // labels (radial, clipped to wedge; always visible)
+  for(let i=0;i<n;i++){
+    const a1 = rot + i*slice, a2 = rot + (i+1)*slice, mid = (a1+a2)/2;
     const name = labels[i];
-
-    // Clip to wedge
+    // clip wedge
     ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(0,0);
-    ctx.arc(0,0,R,t1,t2,false);
-    ctx.closePath();
-    ctx.clip();
+    ctx.beginPath(); ctx.moveTo(CX,CY); ctx.arc(CX,CY,R,a1,a2,false); ctx.closePath(); ctx.clip();
 
-    const arcLen = labelR * (t2 - t1);
-    const tangentOK = arcLen >= 26;
+    ctx.save();
+    ctx.translate(CX,CY);
+    ctx.rotate(mid);
+    // keep upright
+    if (Math.cos(mid) < 0){ ctx.rotate(Math.PI); }
+    const maxW = (labelEnd - labelStart) * 0.95;
 
-    if (tangentOK) {
-      // Tangent orientation
-      ctx.save();
-      const midRad = mid * Math.PI/180;
-      ctx.rotate(midRad + Math.PI/2);
-      ctx.translate(labelR, 0);
-
-      // Auto-fit (BUGFIX: use &&, not 'and')
-      let fontSize = 18;
-      ctx.font = `700 ${fontSize}px system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif`;
-      let w = ctx.measureText(name).width;
-      while (w > arcLen * 0.92 && fontSize > 9){
-        fontSize -= 1;
-        ctx.font = `700 ${fontSize}px system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif`;
-        w = ctx.measureText(name).width;
-      }
-
-      // Keep upright
-      const absA = mod(mid, 360);
-      if (absA > 90 && absA < 270){
-        ctx.rotate(Math.PI);
-        ctx.textAlign = "right";
-      } else {
-        ctx.textAlign = "left";
-      }
-      ctx.textBaseline = "middle";
-      ctx.strokeStyle = "rgba(255,255,255,0.9)";
-      ctx.lineWidth = Math.max(2, Math.floor(fontSize/6));
-      ctx.fillStyle = "#111";
-      ctx.strokeText(name, 0, 0);
-      ctx.fillText(name, 0, 0);
-      ctx.restore();
-    } else {
-      // Radial fallback
-      ctx.save();
-      const midRad = mid * Math.PI/180;
-      ctx.rotate(midRad);
-      const startR = (R*0.30) + 10;
-      const endR   = R * 0.90;
-      const maxW   = (endR - startR) * 0.95;
-
-      let fontSize = 18;
-      ctx.font = `700 ${fontSize}px system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif`;
-      let w = ctx.measureText(name).width;
-      while (w > maxW && fontSize > 9){
-        fontSize -= 1;
-        ctx.font = `700 ${fontSize}px system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif`;
-        w = ctx.measureText(name).width;
-      }
-
-      if (Math.cos(mid * Math.PI/180) < 0){
-        ctx.rotate(Math.PI);
-        ctx.textAlign = "right";
-      } else {
-        ctx.textAlign = "left";
-      }
-      ctx.textBaseline = "middle";
-      ctx.strokeStyle = "rgba(255,255,255,0.9)";
-      ctx.lineWidth = Math.max(2, Math.floor(fontSize/6));
-      ctx.fillStyle = "#111";
-      ctx.strokeText(name, startR, 0);
-      ctx.fillText(name, startR, 0);
-      ctx.restore();
+    // auto-fit
+    let font = 18;
+    ctx.font = `700 ${font}px system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif`;
+    let w = ctx.measureText(name).width;
+    while (w > maxW && font > 9){
+      font -= 1;
+      ctx.font = `700 ${font}px system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif`;
+      w = ctx.measureText(name).width;
     }
 
-    ctx.restore(); // end clip
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = Math.max(2, Math.floor(font/6));
+    ctx.fillStyle = "#111";
+    ctx.strokeText(name, labelStart, 0);
+    ctx.fillText(name, labelStart, 0);
+    ctx.restore();
+    ctx.restore();
   }
 
   // hub
-  ctx.beginPath();
-  ctx.arc(0,0,hubR,0,TAU);
-  ctx.fillStyle = "#fff";
-  ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "#333";
-  ctx.stroke();
-
-  ctx.restore();
+  ctx.beginPath(); ctx.arc(CX,CY,innerR,0,2*Math.PI); ctx.fillStyle="#fff"; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle="#333"; ctx.stroke();
 }
 
-function computeWinner(rot){
-  // Pointer is on the RIGHT => angle = 0° in wheel frame
-  const n = Math.max(1, labels.length);
-  const sliceDeg = 360 / n;
-  const p = mod(0 - rot, 360); // pointer angle within wheel
-  return Math.min(n-1, Math.floor(p / sliceDeg));
+function winnerIndex(rot){
+  const n = Math.max(1, labels.length), slice = 2*Math.PI/n;
+  const p = mod(0 - rot, 2*Math.PI); // pointer at angle 0 (right)
+  return Math.min(n-1, Math.floor(p / slice));
 }
 
-function drawCount(){
-  document.getElementById("count").textContent =
-    labels.length + " slice" + (labels.length===1 ? "" : "s") + " on wheel";
-}
-
-// ---------- controls ----------
-const spinBtn = document.getElementById("spinBtn");
-const resetBtn = document.getElementById("resetBtn");
-const dlBtn = document.getElementById("dlBtn");
-const btnRemove1 = document.getElementById("remove1");
-const btnRemoveAll = document.getElementById("removeAll");
-
-function setElimDisabled(v){ btnRemove1.disabled = v; btnRemoveAll.disabled = v; }
-
-function spinOnce(){
+function spin(){
   if (spinning || labels.length < 2) return;
-  spinning = true; setElimDisabled(true);
-  document.getElementById("winner").textContent = "";
+  spinning = true; setElims(true);
+  document.getElementById('winner').textContent = "";
 
-  const fullSpins = Math.max(1, INIT.maxSpins);
-  const totalDelta = fullSpins*360 + Math.random()*360;
-  const duration = Math.max(400, Math.min(10000, INIT.durationMs));
-  const start = performance.now(), startRot = rotationDeg;
+  const total = (INIT.maxSpins||6)*2*Math.PI + Math.random()*2*Math.PI;
+  const dur = Math.max(400, Math.min(10000, INIT.durationMs||5000));
+  const t0 = performance.now(), start = rotation;
 
-  function frame(t){
-    const p = Math.min(1, (t - start)/duration);
-    const k = easeOutCubic(p);
-    rotationDeg = mod(startRot + totalDelta * k, 360);
-    drawWheel(rotationDeg);
-    if (p < 1) { requestAnimationFrame(frame); }
+  const frame = (t)=>{
+    const p = Math.min(1,(t-t0)/dur), k = easeOutCubic(p);
+    rotation = mod(start + total*k, 2*Math.PI);
+    draw(rotation);
+    if (p<1) requestAnimationFrame(frame);
     else {
-      lastWinIdx = computeWinner(rotationDeg);
-      const winnerFull = fulls[lastWinIdx] || labels[lastWinIdx] || "";
-      document.getElementById("winner").textContent = "🏆 Winner: " + winnerFull;
-      setElimDisabled(false);
-      spinning = false;
+      lastIdx = winnerIndex(rotation);
+      const full = fulls[lastIdx] || labels[lastIdx] || "";
+      document.getElementById('winner').textContent = "🏆 Winner: " + full;
+      setElims(false); spinning = false;
     }
-  }
+  };
   requestAnimationFrame(frame);
 }
 
-spinBtn.addEventListener("click", spinOnce);
+function setElims(dis){ document.getElementById('rm1').disabled = dis; document.getElementById('rmAll').disabled = dis; }
+function updateCount(){ document.getElementById('count').textContent = labels.length + " slice" + (labels.length===1?"":"s") + " on wheel"; }
 
-resetBtn.addEventListener("click", ()=>{
-  labels = [...INIT.labels];
-  fulls  = [...INIT.fulls];
-  rotationDeg = 0;
-  lastWinIdx = null;
-  setElimDisabled(true);
-  document.getElementById("winner").textContent = "";
-  drawWheel(rotationDeg);
-  drawCount();
-});
+document.getElementById('spinBtn').onclick = spin;
+document.getElementById('resetBtn').onclick = ()=>{ labels=[...INIT.labels]; fulls=[...INIT.fulls]; rotation=0; lastIdx=null; setElims(true); document.getElementById('winner').textContent=""; draw(rotation); updateCount(); };
+document.getElementById('pngBtn').onclick   = ()=>{ const a=document.createElement('a'); a.download="wheel.png"; a.href=canvas.toDataURL("image/png"); a.click(); };
+document.getElementById('rm1').onclick      = ()=>{ if(lastIdx==null)return; labels.splice(lastIdx,1); fulls.splice(lastIdx,1); lastIdx=null; setElims(true); draw(rotation); updateCount(); };
+document.getElementById('rmAll').onclick    = ()=>{ if(lastIdx==null)return; const n=labels[lastIdx]; const L=[],F=[]; for(let i=0;i<labels.length;i++){ if(labels[i]!==n){L.push(labels[i]);F.push(fulls[i]);} } labels=L; fulls=F; lastIdx=null; setElims(true); draw(rotation); updateCount(); };
 
-dlBtn.addEventListener("click", ()=>{
-  const a = document.createElement("a");
-  a.download = "wheel.png";
-  a.href = canvas.toDataURL("image/png");
-  a.click();
-});
-
-btnRemove1.addEventListener("click", ()=>{
-  if (lastWinIdx==null) return;
-  labels.splice(lastWinIdx,1);
-  fulls.splice(lastWinIdx,1);
-  lastWinIdx = null;
-  setElimDisabled(true);
-  drawWheel(rotationDeg);
-  drawCount();
-});
-
-btnRemoveAll.addEventListener("click", ()=>{
-  if (lastWinIdx==null) return;
-  const name = labels[lastWinIdx];
-  const newL = [], newF = [];
-  for (let i=0;i<labels.length;i++){
-    if (labels[i] !== name){ newL.push(labels[i]); newF.push(fulls[i]); }
-  }
-  labels = newL; fulls = newF;
-  lastWinIdx = null;
-  setElimDisabled(true);
-  drawWheel(rotationDeg);
-  drawCount();
-});
-
-// first paint
-drawWheel(rotationDeg);
-drawCount();
+draw(rotation); updateCount();
 </script>
 """
-    return html_template.replace("__INIT_JSON__", json.dumps(init))
+    return html.replace("__INIT_JSON__", json.dumps(init))
+
 
 # ---------------- UI ----------------
 st.title("🎟️ Raffle Entries Builder")
