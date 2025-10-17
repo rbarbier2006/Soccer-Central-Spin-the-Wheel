@@ -392,21 +392,21 @@ st.caption("Required headers: ID1, Full Name, Email1, Phone Number, Tickets Purc
 st.divider()
 st.header("🏁 Winners log")
 
-# --- live auto-refresh for winners (gentle) ---
+# Optional live auto-refresh (needs: streamlit-autorefresh in requirements)
 try:
     from streamlit_autorefresh import st_autorefresh
 except Exception:
     st_autorefresh = None
 
-live = st.toggle("⚡ Live update winners", value=True,
-                 help="Auto-refresh this section about once per second when on.")
-if live:
-    if st_autorefresh:
-        # Rerun the script ~every 0.8s to pick up new winners from localStorage
-        st_autorefresh(interval=800, key="winners_live_auto")
-    else:
-        st.info("Install `streamlit-autorefresh` for live updates.")
-# ----------------------------------------------
+live = st.toggle(
+    "⚡ Live update winners",
+    value=False,
+    help="Auto-refresh this section every ~0.8s when on (requires streamlit-autorefresh).",
+)
+if live and st_autorefresh:
+    st_autorefresh(interval=800, key="winners_live_auto")
+elif live and not st_autorefresh:
+    st.info("Install **streamlit-autorefresh** for live updates.")
 
 if streamlit_js_eval is None:
     st.warning(
@@ -414,9 +414,7 @@ if streamlit_js_eval is None:
         "`pip install streamlit-js-eval` (or add `streamlit-js-eval` to requirements.txt)"
     )
 else:
-    # ---- Install a bridge in the *parent* page to capture winners from the iframe ----
-    # When the iframe (wheel) posts {__raffle__: true, type:'append', rec}, we append it to
-    # the parent page's localStorage('raffle_winners_v1'), which we can read from Python.
+    # Bridge so the iframe (wheel) can push winners to the parent page
     streamlit_js_eval(
         js_expressions="""
 (() => {
@@ -441,9 +439,21 @@ else:
         """,
         key="install_raffle_bridge_v1",
     )
-    # -------------------------------------------------------------------------------
 
-    # Pull winners from the parent page's localStorage
+    # Controls — always visible now
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🔄 Refresh winners", use_container_width=True):
+            st.experimental_rerun()
+    with c2:
+        if st.button("🧹 Clear winners log", use_container_width=True):
+            streamlit_js_eval(
+                js_expressions="localStorage.removeItem('raffle_winners_v1');",
+                key="clear_winners_v1",
+            )
+            st.experimental_rerun()
+
+    # Read winners from parent page storage
     winners_json = streamlit_js_eval(
         js_expressions="localStorage.getItem('raffle_winners_v1')",
         key="pull_winners_v1",
@@ -476,17 +486,6 @@ else:
             file_name="winners.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🔄 Refresh winners"):
-                st.experimental_rerun()
-        with col2:
-            if st.button("🧹 Clear winners log"):
-                streamlit_js_eval(
-                    js_expressions="localStorage.removeItem('raffle_winners_v1');",
-                    key="clear_winners_v1",
-                )
-                st.experimental_rerun()
     else:
-        st.info("No winners recorded yet. Spin the wheel and click **Refresh winners** to update.")
+        st.info("No winners recorded yet. Spin the wheel, then click **Refresh winners** to pull them in.")
+
