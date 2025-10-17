@@ -89,12 +89,12 @@ def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
     return buf.read()
 
 # ---------------- JS wheel renderer ----------------
+import json
 
 def render_wheel(display_names, full_entries):
-    # config passed to JS
     init = {
-        "labels": [str(x) for x in display_names],   # names on slices
-        "fulls":  [str(x) for x in full_entries],    # full entry shown as winner
+        "labels": [str(x) for x in display_names],
+        "fulls":  [str(x) for x in full_entries],
         "durationMs": 5000,
         "minSpins": 6,
         "maxSpins": 6
@@ -105,7 +105,6 @@ def render_wheel(display_names, full_entries):
   <h1 style="margin:0 0 8px 0;font-weight:800;font-size:28px;">🎰 Spin the Wheel</h1>
 
   <div style="position:relative;width:560px;max-width:92vw;">
-    <!-- RIGHT pointer -->
     <div style="position:absolute;right:-2px;top:50%;transform:translateY(-50%) rotate(180deg);
                 width:0;height:0;border-top:14px solid transparent;border-bottom:14px solid transparent;
                 border-left:26px solid #444;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));"></div>
@@ -146,7 +145,7 @@ function setupCanvas(){
   canvas.style.height = size + "px";
   canvas.width = Math.floor(size * dpr);
   canvas.height = Math.floor(size * dpr);
-  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.setTransform(dpr,0,0,dpr,0,0); // draw in CSS pixels
 }
 setupCanvas();
 window.addEventListener('resize', ()=>{ setupCanvas(); draw(rotation); });
@@ -173,12 +172,11 @@ function draw(rot=0){
     const a1 = rot + i*slice, a2 = rot + (i+1)*slice;
     ctx.beginPath(); ctx.moveTo(CX,CY); ctx.arc(CX,CY,R,a1,a2,false); ctx.closePath();
     ctx.fillStyle = hsv(i,n); ctx.fill();
-    // separator
     ctx.beginPath(); ctx.arc(CX,CY,R,a1,a1+0.006,false);
     ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; ctx.stroke();
   }
 
-  // labels (radial, clipped to wedge; always visible)
+  // labels
   for(let i=0;i<n;i++){
     const a1 = rot + i*slice, a2 = rot + (i+1)*slice, mid = (a1+a2)/2;
     const name = labels[i];
@@ -191,9 +189,8 @@ function draw(rot=0){
     ctx.translate(CX,CY);
     ctx.rotate(mid);
 
-    // keep upright; if flipped, also flip the anchor so it doesn't draw under the hub
-    const flipped = Math.cos(mid) < 0;
-    if (flipped) ctx.rotate(Math.PI);
+    const flipped = Math.cos(mid) < 0; // left half of the wheel
+    if (flipped) ctx.rotate(Math.PI);  // keep upright
 
     const maxW = (labelEnd - labelStart) * 0.95;
 
@@ -207,9 +204,11 @@ function draw(rot=0){
       w = ctx.measureText(name).width;
     }
 
-    ctx.textAlign = "left";
+    // *** key fix: anchor swap instead of negative x ***
+    ctx.textAlign = flipped ? "right" : "left";
     ctx.textBaseline = "middle";
-    const x = flipped ? -labelStart : labelStart;   // <-- critical fix
+    const x = labelStart;
+
     ctx.strokeStyle = "rgba(255,255,255,0.9)";
     ctx.lineWidth = Math.max(2, Math.floor(font/6));
     ctx.fillStyle = "#111";
@@ -220,8 +219,9 @@ function draw(rot=0){
     ctx.restore();  // clip save
   }
 
-  // hub
-  ctx.beginPath(); ctx.arc(CX,CY,innerR,0,2*Math.PI); ctx.fillStyle="#fff"; ctx.fill();
+  // hub on top
+  ctx.beginPath(); ctx.arc(CX,CY,innerR,0,2*Math.PI);
+  ctx.fillStyle="#fff"; ctx.fill();
   ctx.lineWidth = 2; ctx.strokeStyle="#333"; ctx.stroke();
 }
 
