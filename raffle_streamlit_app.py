@@ -392,6 +392,22 @@ st.caption("Required headers: ID1, Full Name, Email1, Phone Number, Tickets Purc
 st.divider()
 st.header("🏁 Winners log")
 
+# --- live auto-refresh for winners (gentle) ---
+try:
+    from streamlit_autorefresh import st_autorefresh
+except Exception:
+    st_autorefresh = None
+
+live = st.toggle("⚡ Live update winners", value=True,
+                 help="Auto-refresh this section about once per second when on.")
+if live:
+    if st_autorefresh:
+        # Rerun the script ~every 0.8s to pick up new winners from localStorage
+        st_autorefresh(interval=800, key="winners_live_auto")
+    else:
+        st.info("Install `streamlit-autorefresh` for live updates.")
+# ----------------------------------------------
+
 if streamlit_js_eval is None:
     st.warning(
         "To display/export winners automatically, add **streamlit-js-eval** to requirements:\n\n"
