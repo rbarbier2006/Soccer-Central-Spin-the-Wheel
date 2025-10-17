@@ -16,12 +16,10 @@ REQUIRED_COLUMNS = {
     "Tickets Purchased": "R",
 }
 
-
 def clean_cell(x):
     if pd.isna(x):
         return ""
     return str(x).strip()
-
 
 def build_entries(df: pd.DataFrame, id_value: str = "6610", separator: str = " - "):
     """
@@ -29,9 +27,8 @@ def build_entries(df: pd.DataFrame, id_value: str = "6610", separator: str = " -
     entries_df has one column 'Entry' with repeated rows by Tickets Purchased.
     """
     df = df.copy()
-    df.columns = [str(c).strip() for c in df.columns]  # normalize headers
+    df.columns = [str(c).strip() for c in df.columns]
 
-    # Validate required columns
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         return (
@@ -39,7 +36,7 @@ def build_entries(df: pd.DataFrame, id_value: str = "6610", separator: str = " -
             {
                 "ok": False,
                 "message": "Missing required column(s): "
-                + ", ".join([f"{c} (expected in column {REQUIRED_COLUMNS[c]})" for c in missing]),
+                           + ", ".join([f"{c} (expected in column {REQUIRED_COLUMNS[c]})" for c in missing]),
             },
         )
 
@@ -64,8 +61,8 @@ def build_entries(df: pd.DataFrame, id_value: str = "6610", separator: str = " -
     # Build "Full Name - Email1 - Phone Number"
     combined = filtered.apply(
         lambda r: f"{clean_cell(r['Full Name'])}{separator}"
-        f"{clean_cell(r['Email1'])}{separator}"
-        f"{clean_cell(r['Phone Number'])}",
+                  f"{clean_cell(r['Email1'])}{separator}"
+                  f"{clean_cell(r['Phone Number'])}",
         axis=1,
     ).astype(str)
 
@@ -85,7 +82,6 @@ def build_entries(df: pd.DataFrame, id_value: str = "6610", separator: str = " -
     }
     return out_df, info
 
-
 def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -93,52 +89,42 @@ def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
     buf.seek(0)
     return buf.read()
 
-
-# ---------- Pure-JS wheel (no external libraries) ----------
+# ---------- Wheel renderer (no f-strings in HTML) ----------
 def render_pure_wheel(display_labels, full_labels):
     """
     HTML wheel (Canvas + requestAnimationFrame) with label clipping + auto-fit.
     - display_labels: names shown on slices (duplicates allowed for weighting)
     - full_labels: full entries aligned 1:1 with display_labels
-    - Pointer on RIGHT (triangle flipped) — slice under the pointer wins
-    - Labels:
-        * clipped to their wedge (never overflow)
-        * auto-fit font size to arc length
-        * fallback to radial text when slice is too thin
-    - Buttons:
-        * Eliminate Winner (1 slice)
-        * Eliminate All (same name)
-        * Reset (restore original pool)
     """
     display_json = json.dumps([str(x) for x in display_labels])
     full_json = json.dumps([str(x) for x in full_labels])
     disabled_attr = "disabled" if len(display_labels) == 0 else ""
 
-    return f"""
+    html = """
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8" />
 <style>
-  body {{ margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }}
-  .wrap {{ display:flex; flex-direction:column; align-items:center; gap:16px; padding:8px; }}
-  #wheel {{ position:relative; width:560px; height:560px; }}
-  #wheel canvas {{ width:560px; height:560px; background:#fff; border-radius:50%; }}
+  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+  .wrap { display:flex; flex-direction:column; align-items:center; gap:16px; padding:8px; }
+  #wheel { position:relative; width:560px; height:560px; }
+  #wheel canvas { width:560px; height:560px; background:#fff; border-radius:50%; }
   /* RIGHT-side pointer; flipped 180° (pointing into wheel) */
-  .pointer {{
+  .pointer {
     position:absolute; right:-2px; top:50%; transform:translateY(-50%) rotate(180deg);
     width:0; height:0; border-top:14px solid transparent; border-bottom:14px solid transparent;
     border-left:26px solid #444; filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));
-  }}
-  .btn {{ background:#4F46E5; color:#fff; border:none; padding:10px 16px; border-radius:10px;
-         font-weight:600; cursor:pointer; margin-right:8px; }}
-  .btn.secondary {{ background:#6B7280; }}
-  .btn.warn {{ background:#DC2626; }}
-  .btn.altwarn {{ background:#EF4444; }}
-  .btn:disabled {{ background:#9AA0A6; cursor:not-allowed; }}
-  .winner {{ font-weight:700; min-height:1.5em; }}
-  .row {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center; }}
-  .muted {{ color:#6B7280; font-size:0.9rem; }}
+  }
+  .btn { background:#4F46E5; color:#fff; border:none; padding:10px 16px; border-radius:10px;
+         font-weight:600; cursor:pointer; margin-right:8px; }
+  .btn.secondary { background:#6B7280; }
+  .btn.warn { background:#DC2626; }
+  .btn.altwarn { background:#EF4444; }
+  .btn:disabled { background:#9AA0A6; cursor:not-allowed; }
+  .winner { font-weight:700; min-height:1.5em; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center; }
+  .muted { color:#6B7280; font-size:0.9rem; }
 </style>
 </head>
 <body>
@@ -149,7 +135,7 @@ def render_pure_wheel(display_labels, full_labels):
   </div>
 
   <div class="row">
-    <button id="spin" class="btn" {disabled_attr}>Spin 🎯</button>
+    <button id="spin" class="btn" %%DISABLED%%>Spin 🎯</button>
     <button id="reset" class="btn secondary">Reset</button>
     <button id="remove1" class="btn warn" disabled>Eliminate Winner (1 slice)</button>
     <button id="removeAll" class="btn altwarn" disabled>Eliminate All (same name)</button>
@@ -159,8 +145,8 @@ def render_pure_wheel(display_labels, full_labels):
 </div>
 
 <script>
-const origDisplay = {display_json};
-const origFull    = {full_json};
+const origDisplay = %%DISPLAY%%;
+const origFull    = %%FULL%%;
 
 let displayPool = origDisplay.slice();
 let fullPool    = origFull.slice();
@@ -184,20 +170,20 @@ const countEl = document.getElementById('count');
 let angle = 0;
 let spinning = false;
 
-function updateCount() {{
+function updateCount() {
   countEl.textContent = displayPool.length + " slice" + (displayPool.length===1?"":"s") + " on wheel";
-}}
+}
 updateCount();
 
-function pastel(i) {{
+function pastel(i) {
   const hue = (i * 137.508) % 360;
   return 'hsl(' + hue + ',70%,60%)';
-}}
+}
 
 /* ---------- Label drawing helpers ---------- */
 
 // draw text tangent to arc at labelR, clipped to [start,end]
-function drawTangentialClipped(text, start, end) {{
+function drawTangentialClipped(text, start, end) {
   const mid = (start + end) / 2;
   const sliceAngle = end - start;
   const maxArc = sliceAngle * labelR * 0.92; // width budget along arc
@@ -220,17 +206,17 @@ function drawTangentialClipped(text, start, end) {{
   let fontSize = 18;
   ctx.font = fontSize + 'px sans-serif';
   let width = ctx.measureText(text).width;
-  if (width > maxArc) {{
+  if (width > maxArc) {
     fontSize = Math.max(9, Math.floor(fontSize * (maxArc / width)));
     ctx.font = fontSize + 'px sans-serif';
     width = ctx.measureText(text).width;
-  }}
+  }
   // Truncate with ellipsis if still too wide
-  if (width > maxArc) {{
+  if (width > maxArc) {
     const avg = Math.max(6, Math.floor(width / text.length)); // px/char
     const maxChars = Math.max(3, Math.floor(maxArc / avg));
     text = text.length > maxChars ? text.slice(0, maxChars - 1) + '…' : text;
-  }}
+  }
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -245,7 +231,7 @@ function drawTangentialClipped(text, start, end) {{
 }
 
 // draw text radial (along the radius) starting near innerR; clipped to [start,end]
-function drawRadialClipped(text, start, end) {{
+function drawRadialClipped(text, start, end) {
   const mid = (start + end) / 2;
 
   // Clip wedge
@@ -270,16 +256,16 @@ function drawRadialClipped(text, start, end) {{
   let fontSize = 18;
   ctx.font = fontSize + 'px sans-serif';
   let width = ctx.measureText(text).width;
-  if (width > maxW) {{
+  if (width > maxW) {
     fontSize = Math.max(9, Math.floor(fontSize * (maxW / width)));
     ctx.font = fontSize + 'px sans-serif';
     width = ctx.measureText(text).width;
-  }}
-  if (width > maxW) {{
+  }
+  if (width > maxW) {
     const avg = Math.max(6, Math.floor(width / text.length));
     const maxChars = Math.max(3, Math.floor(maxW / avg));
     text = text.length > maxChars ? text.slice(0, maxChars - 1) + '…' : text;
-  }}
+  }
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
@@ -291,24 +277,24 @@ function drawRadialClipped(text, start, end) {{
   ctx.fillText(text, startR, 0);
 
   ctx.restore();
-}}
+}
 
 /* ---------- Wheel drawing ---------- */
 
-function drawWheel(a) {{
+function drawWheel(a) {
   ctx.clearRect(0,0,W,H);
   const n = displayPool.length;
-  if (n === 0) {{
+  if (n === 0) {
     ctx.fillStyle = '#666';
     ctx.font = '16px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('No entries loaded', CX, CY);
     return;
-  }}
+  }
   const slice = twoPi / n;
 
   // 1) Draw all wedges
-  for (let i=0; i<n; i++) {{
+  for (let i=0; i<n; i++) {
     const start = a + i*slice;
     const end   = a + (i+1)*slice;
     ctx.beginPath();
@@ -317,39 +303,39 @@ function drawWheel(a) {{
     ctx.closePath();
     ctx.fillStyle = pastel(i);
     ctx.fill();
-  }}
+  }
 
   // 2) Labels on top — tangent when arc wide enough, otherwise radial
-  for (let i=0; i<n; i++) {{
+  for (let i=0; i<n; i++) {
     const start = a + i*slice;
     const end   = a + (i+1)*slice;
     const arcLen = (end - start) * labelR;
-    if (arcLen >= 26) {{
+    if (arcLen >= 26) {
       drawTangentialClipped(displayPool[i], start, end);
-    }} else {{
+    } else {
       drawRadialClipped(displayPool[i], start, end);
-    }}
-  }}
+    }
+  }
 
   // 3) Inner circle
   ctx.beginPath();
   ctx.arc(CX, CY, innerR, 0, twoPi);
   ctx.fillStyle = '#fff';
   ctx.fill();
-}}
+}
 
-function easeOutCubic(t) {{ return 1 - Math.pow(1 - t, 3); }}
-function modTau(x) {{ const t = twoPi; x = x % t; return x < 0 ? x + t : x; }}
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+function modTau(x) { const t = twoPi; x = x % t; return x < 0 ? x + t : x; }
 
 // Pointer is at angle 0 (right). Align center of slice to angle 0.
-function targetAngleForIndex(idx) {{
+function targetAngleForIndex(idx) {
   const n = displayPool.length;
   const slice = twoPi / n;
   const center = (idx + 0.5) * slice;
   return 0 - center;
-}}
+}
 
-function spin() {{
+function spin() {
   if (spinning || displayPool.length === 0) return;
   spinning = true;
   lastWinnerIndex = null;
@@ -368,26 +354,26 @@ function spin() {{
   const duration = 5000;
   const t0 = performance.now();
 
-  function frame(t) {{
+  function frame(t) {
     const p = Math.min(1, (t - t0) / duration);
     const k = easeOutCubic(p);
     angle = start + (end - start) * k;
     drawWheel(angle);
-    if (p < 1) {{
+    if (p < 1) {
       requestAnimationFrame(frame);
-    }} else {{
+    } else {
       spinning = false;
       lastWinnerIndex = idx;
       const full = fullPool[idx] || '';
       winnerEl.textContent = '🏆 Winner: ' + full;
       remove1Btn.disabled = false;
       removeAllBtn.disabled = false;
-    }}
-  }}
+    }
+  }
   requestAnimationFrame(frame);
-}}
+}
 
-function resetWheel() {{
+function resetWheel() {
   displayPool = origDisplay.slice();
   fullPool    = origFull.slice();
   angle = 0; lastWinnerIndex = null;
@@ -397,32 +383,32 @@ function resetWheel() {{
   drawWheel(angle);
   updateCount();
   spinBtn.disabled = (displayPool.length === 0);
-}}
+}
 
-function removeWinnerOne() {{
+function removeWinnerOne() {
   if (lastWinnerIndex == null) return;
-  if (lastWinnerIndex >= 0 && lastWinnerIndex < displayPool.length) {{
+  if (lastWinnerIndex >= 0 && lastWinnerIndex < displayPool.length) {
     displayPool.splice(lastWinnerIndex, 1);
     fullPool.splice(lastWinnerIndex, 1);
-  }}
+  }
   lastWinnerIndex = null;
   remove1Btn.disabled = true;
   removeAllBtn.disabled = true;
   drawWheel(angle);
   updateCount();
   if (displayPool.length === 0) spinBtn.disabled = true;
-}}
+}
 
-function removeWinnerAll() {{
+function removeWinnerAll() {
   if (lastWinnerIndex == null) return;
   const name = displayPool[lastWinnerIndex];
   const newDisplay = [], newFull = [];
-  for (let i=0; i<displayPool.length; i++) {{
-    if (displayPool[i] !== name) {{
+  for (let i=0; i<displayPool.length; i++) {
+    if (displayPool[i] !== name) {
       newDisplay.push(displayPool[i]);
       newFull.push(fullPool[i]);
-    }}
-  }}
+    }
+  }
   displayPool = newDisplay;
   fullPool = newFull;
   lastWinnerIndex = null;
@@ -431,7 +417,7 @@ function removeWinnerAll() {{
   drawWheel(angle);
   updateCount();
   if (displayPool.length === 0) spinBtn.disabled = true;
-}}
+}
 
 spinBtn.addEventListener('click', spin);
 resetBtn.addEventListener('click', resetWheel);
@@ -444,7 +430,8 @@ drawWheel(angle);
 </body>
 </html>
 """
-
+    html = html.replace("%%DISPLAY%%", display_json).replace("%%FULL%%", full_json).replace("%%DISABLED%%", disabled_attr)
+    return html
 
 # ---------- UI ----------
 st.title("🎟️ Raffle Entries Builder")
