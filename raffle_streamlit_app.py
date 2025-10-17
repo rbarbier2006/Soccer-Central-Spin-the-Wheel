@@ -4,6 +4,12 @@ import pandas as pd
 import streamlit as st
 from streamlit.components.v1 import html as st_html
 
+# Optional helper to read/write browser-localStorage from Streamlit
+try:
+    from streamlit_js_eval import streamlit_js_eval
+except Exception:  # still works without it; we just won't show the log table
+    streamlit_js_eval = None
+
 # ---------------- Page / constants ----------------
 st.set_page_config(page_title="Raffle Wheel", page_icon="🎟️", layout="centered")
 
@@ -89,12 +95,10 @@ def to_excel_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
     return buf.read()
 
 # ---------------- JS wheel renderer ----------------
-import json
-
 def render_wheel(display_names, full_entries):
     init = {
-        "labels": [str(x) for x in display_names],
-        "fulls":  [str(x) for x in full_entries],
+        "labels": [str(x) for x in display_names],   # what shows on each slice
+        "fulls":  [str(x) for x in full_entries],    # full "Name - Email - Phone" (winner line)
         "durationMs": 5000,
         "minSpins": 6,
         "maxSpins": 6
@@ -176,7 +180,7 @@ function draw(rot=0){
     ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; ctx.stroke();
   }
 
-  // labels anchored at the rim, flowing inward
+  // labels anchored at the rim, flowing inward (radial), clipped to wedge
   for(let i=0;i<n;i++){
     const a1 = rot + i*slice, a2 = rot + (i+1)*slice, mid = (a1+a2)/2;
     const name = labels[i];
@@ -245,11 +249,29 @@ function spin(){
     const p = Math.min(1,(t-t0)/dur), k = easeOutCubic(p);
     rotation = mod(start + total*k, 2*Math.PI);
     draw(rotation);
-    if (p<1) requestAnimationFrame(frame);
+    if (p<1) { requestAnimationFrame(frame); }
     else {
       lastIdx = winnerIndex(rotation);
       const full = fulls[lastIdx] || labels[lastIdx] || "";
       document.getElementById('winner').textContent = "🏆 Winner: " + full;
+
+      // ---- NEW: log winner to browser storage so Streamlit can export it ----
+      try {
+        const parts = (full || "").split(" - ");
+        const rec = {
+          name:  (parts[0]||"").trim(),
+          email: (parts[1]||"").trim(),
+          phone: (parts[2]||"").trim(),
+          full:  full,
+          ts:    Date.now()
+        };
+        const KEY = "raffle_winners_v1";
+        const arr = JSON.parse(localStorage.getItem(KEY) || "[]");
+        arr.push(rec);
+        localStorage.setItem(KEY, JSON.stringify(arr));
+      } catch(e) { console.error("winner log error", e); }
+      // ----------------------------------------------------------------------
+
       setElims(false); spinning = false;
     }
   };
@@ -355,7 +377,7 @@ if df is not None:
 
     # Wheel inputs
     full_entries = out_df["Entry"].fillna("").astype(str).tolist()
-    display_names = [s.split(" - ")[0] for s in full_entries]
+    display_names = [(s.partition(" - ")[0].strip() or s) for s in full_entries]  # robust fallback
 
     if len(display_names) == 0:
         st.warning("No entries to spin. Check the ID filter and that Tickets Purchased > 0.")
@@ -363,3 +385,63 @@ if df is not None:
         st_html(render_wheel(display_names, full_entries), height=820, scrolling=False)
 
 st.caption("Required headers: ID1, Full Name, Email1, Phone Number, Tickets Purchased.")
+
+# ===================== Winners log (display + Excel export) =====================
+st.divider()
+st.header("🏁 Winners log")
+
+if streamlit_js_eval is None:
+    st.warning(
+        "To display/export winners automatically, add **streamlit-js-eval** to requirements:\n\n"
+        "`pip install streamlit-js-eval` (or add `streamlit-js-eval` to requirements.txt)"
+    )
+else:
+    # Pull winners array from the browser (written by the wheel JS)
+    winners_json = streamlit_js_eval(
+        js_expressions="localStorage.getItem('raffle_winners_v1')",
+        key="pull_winners_v1",
+    )
+
+    # Parse -> DataFrame with desired columns
+    winners = []
+    if winners_json:
+        try:
+            winners = json.loads(winners_json)
+        except Exception:
+            winners = []
+
+    if winners:
+        rows = []
+        for i, r in enumerate(winners, start=1):
+            rows.append({
+                "Winner Number": i,
+                "Full Name":     (r.get("name")  or ""),
+                "Email":         (r.get("email") or ""),
+                "Phone Number":  (r.get("phone") or ""),
+            })
+        wdf = pd.DataFrame(rows)
+
+        st.dataframe(wdf, use_container_width=True)
+
+        # Download as Excel
+        xbytes = to_excel_bytes(wdf, header=True)
+        st.download_button(
+            "⬇️ Download winners (.xlsx)",
+            data=xbytes,
+            file_name="winners.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔄 Refresh winners"):
+                st.experimental_rerun()
+        with col2:
+            if st.button("🧹 Clear winners log"):
+                streamlit_js_eval(
+                    js_expressions="localStorage.removeItem('raffle_winners_v1');",
+                    key="clear_winners_v1",
+                )
+                st.experimental_rerun()
+    else:
+        st.info("No winners recorded yet. Spin the wheel and they will appear here automatically.")
