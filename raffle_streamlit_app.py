@@ -1,23 +1,11 @@
-# app.py
-# Streamlit Fortune Wheel (Python + JS, no matplotlib)
-# ---------------------------------------------------
-# - Renders an animated wheel in HTML5 Canvas via embedded JS.
-# - Labels stay inside slices; tangential text orientation with auto-shrink.
-# - Weighted slices (optional).
-# - Fixed pointer at the top; winner calculated precisely.
-# - Client-side animation; optional "remove winner after spin".
-# - Download PNG and spin history in the component UI.
-#
-# Run locally:
-#   pip install streamlit
-#   streamlit run app.py
-
+# app.py — Streamlit + JS Fortune Wheel (no matplotlib)
 import json
 import streamlit as st
 
 st.set_page_config(page_title="Fortune Wheel (JS Canvas)", page_icon="🎡", layout="centered")
 st.title("🎡 Fortune Wheel — Python + JS (no matplotlib)")
 
+# ---- Sidebar inputs ---------------------------------------------------------
 with st.sidebar:
     st.header("Wheel Inputs")
     default_names = "Alice\nBob\nCarlos\nDina\nEvan\nFatima\nGianni\nHana"
@@ -29,21 +17,21 @@ with st.sidebar:
     if csv is not None:
         import pandas as pd
         df = pd.read_csv(csv)
-        # Pick name column
-        name_col = None
+        # Pick a name column
         for c in ["Name", "name", "label", "Label", "names", "labels"]:
             if c in df.columns:
                 name_col = c
                 break
-        if name_col is None:
+        else:
             name_col = df.columns[0]
         labels = [str(x).strip() for x in df[name_col].tolist() if str(x).strip()]
-        # Pick weight column if present
+
+        # Optional weight column
         for wc in ["Weight", "weight", "Weights", "weights"]:
             if wc in df.columns:
                 try:
                     weights = [float(x) for x in df[wc].tolist()]
-                except:
+                except Exception:
                     weights = None
                 break
 
@@ -52,15 +40,13 @@ with st.sidebar:
         if w_txt.strip():
             try:
                 weights = [float(x) for x in w_txt.split(",")]
-            except:
+            except Exception:
                 weights = None
-
-    st.caption("Tip: If weights are omitted or invalid, slices are equal.")
 
     colA, colB = st.columns(2)
     with colA:
         min_spins = st.number_input("Min full spins", 1, 20, 4)
-        duration_ms = int(st.number_input("Spin duration (ms)", 500, 10000, 2500, step=100))
+        duration_ms = int(st.number_input("Spin duration (ms)", 400, 10000, 2500, step=100))
     with colB:
         max_spins = st.number_input("Max full spins", 1, 30, 7)
         seed = st.number_input("Seed (0 = random)", 0, 2_147_483_647, 0, step=1)
@@ -73,7 +59,7 @@ if len(labels) < 2:
 
 config = {
     "labels": labels,
-    "weights": weights if weights and len(weights) == len(labels) else None,
+    "weights": weights if (weights and len(weights) == len(labels)) else None,
     "minSpins": int(min(min_spins, max_spins)),
     "maxSpins": int(max(min_spins, max_spins)),
     "durationMs": int(duration_ms),
@@ -81,7 +67,8 @@ config = {
     "removeAfterWin": bool(remove_after),
 }
 
-html = f"""
+# ---- HTML/JS (no f-string; we inject JSON by .replace) ----------------------
+html_template = '''
 <div id="app" style="display:flex;flex-direction:column;align-items:center;gap:14px;">
   <div style="position:relative; width:560px; max-width:90vw;">
     <div id="pointer" style="position:absolute;left:50%;top:6px;transform:translateX(-50%);width:0;height:0;
@@ -104,9 +91,10 @@ html = f"""
 </div>
 
 <script>
-  // ---------- Utilities ----------
-  const INIT = {json.dumps(config)};
+  // ---------- Config from Python ----------
+  const INIT = __INIT_JSON__;
 
+  // ---------- Utilities ----------
   function mulberry32(a) { // seeded RNG
     return function() {
       let t = a += 0x6D2B79F5;
@@ -115,9 +103,8 @@ html = f"""
       return ((t ^ t >>> 14) >>> 0) / 4294967296;
     }
   }
-
   let rand = Math.random;
-  if (INIT.seed && INIT.seed > 0) rand = mulberry32(INIT.seed >>> 0);
+  if (INIT.seed && INIT.seed > 0) rand = mulberry32((INIT.seed>>>0));
 
   function clamp(x,min,max){ return Math.max(min, Math.min(max, x)); }
   const TAU = Math.PI * 2;
@@ -129,9 +116,7 @@ html = f"""
     let r = [v,q,p,p,t,v][m], g = [t,v,v,q,p,p][m], b = [p,p,t,v,v,q][m];
     return `rgb(${Math.round(r*255)}, ${Math.round(g*255)}, ${Math.round(b*255)})`;
   }
-
   function easeOutCubic(t){ return 1 - Math.pow(1 - t, 3); }
-
   function toRadians(deg){ return deg * Math.PI / 180; }
   function mod(a, n){ return ((a % n) + n) % n; } // positive modulo
 
@@ -145,16 +130,14 @@ html = f"""
     const s = ws.reduce((a,b)=>a+b,0) || 1;
     return ws.map(x => x / s);
   }
-
-  let weightsNorm = normalize(weights);
-  let angles = weightsNorm.map(w => 360*w);
-
   function recompute(){
     weightsNorm = normalize(weights);
     angles = weightsNorm.map(w => 360*w);
   }
+  let weightsNorm = normalize(weights);
+  let angles = weightsNorm.map(w => 360*w);
 
-  // ---------- Canvas Setup (HiDPI) ----------
+  // ---------- Canvas (HiDPI) ----------
   const canvas = document.getElementById('wheel');
   const ctx = canvas.getContext('2d');
   function setupCanvas(){
@@ -169,7 +152,7 @@ html = f"""
     ctx.scale(dpr, dpr);
   }
   setupCanvas();
-  window.addEventListener('resize', setupCanvas);
+  window.addEventListener('resize', ()=>{ setupCanvas(); drawWheel(rotationDeg); });
 
   // ---------- Draw ----------
   function drawWheel(rotationDeg=0){
@@ -180,11 +163,10 @@ html = f"""
     const hubR = R*0.12;
     const rText = R*0.62;
 
-    // backdrop
     ctx.clearRect(0,0,size,size);
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.scale(1, -1); // make y-axis point up (math coords)
+    ctx.scale(1, -1); // y up
 
     // Outer ring
     ctx.save();
@@ -195,16 +177,14 @@ html = f"""
     ctx.stroke();
     ctx.restore();
 
-    // Slices
     let start = 0;
     for (let i=0;i<labels.length;i++){
       const ang = angles[i];
       const theta1 = toRadians(start + rotationDeg);
       const theta2 = toRadians(start + ang + rotationDeg);
 
-      // slice color
-      const color = hsvToRgb((i/labels.length) % 1, 0.75, 0.95);
-
+      // slice
+      const color = hsvToRgb((i/labels.length)%1, 0.75, 0.95);
       ctx.beginPath();
       ctx.moveTo(0,0);
       ctx.arc(0,0,R, theta1, theta2, false);
@@ -212,26 +192,23 @@ html = f"""
       ctx.fillStyle = color;
       ctx.fill();
 
-      // slice separator
+      // separator
       ctx.beginPath();
       ctx.arc(0,0,R, theta1, theta1+0.005, false);
       ctx.lineWidth = 2;
       ctx.strokeStyle = "#fff";
       ctx.stroke();
 
-      // Label text
+      // label
       const mid = start + ang/2;
       const midRad = toRadians(mid + rotationDeg);
-
       ctx.save();
-      // Position at mid angle, tangential orientation
       ctx.rotate(midRad);
       ctx.translate(rText, 0);
 
-      // Auto font size to fit arc length
+      // auto-fit
       const arcLen = rText * toRadians(ang) * 0.9;
       let fontSize = Math.max(10, Math.min(20, 12 + Math.sqrt(ang)));
-
       ctx.font = `700 ${fontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
       let w = ctx.measureText(labels[i]).width;
       while (w > arcLen && fontSize > 9){
@@ -240,7 +217,6 @@ html = f"""
         w = ctx.measureText(labels[i]).width;
       }
 
-      // Avoid upside-down text
       const absA = mod(mid + rotationDeg, 360);
       if (absA > 90 && absA < 270){
         ctx.rotate(Math.PI);
@@ -256,7 +232,7 @@ html = f"""
       start += ang;
     }
 
-    // Center hub
+    // hub
     ctx.beginPath();
     ctx.arc(0,0,hubR,0,TAU);
     ctx.fillStyle = "#fff";
@@ -265,7 +241,7 @@ html = f"""
     ctx.strokeStyle = "#333";
     ctx.stroke();
 
-    // Center text
+    // center text
     ctx.save();
     ctx.scale(1, -1);
     ctx.fillStyle = "#111";
@@ -278,10 +254,9 @@ html = f"""
     ctx.restore();
   }
 
-  // ---------- Winner calculation ----------
+  // ---------- Winner ----------
   function computeWinner(rotationDeg){
-    // pointer at +90° (up)
-    const pointerAngle = 90;
+    const pointerAngle = 90; // up
     const pointerInWheel = mod(pointerAngle - rotationDeg, 360);
     let cum = 0;
     for (let i=0;i<labels.length;i++){
@@ -289,7 +264,7 @@ html = f"""
       if (pointerInWheel >= cum && pointerInWheel < cum + a) return i;
       cum += a;
     }
-    return labels.length - 1; // fallback
+    return labels.length - 1;
   }
 
   // ---------- Animation ----------
@@ -304,7 +279,7 @@ html = f"""
 
     const minS = Math.max(1, Math.min(INIT.minSpins, INIT.maxSpins));
     const maxS = Math.max(minS, INIT.maxSpins);
-    const fullSpins = Math.floor(minS + rand() * (maxS - minS + 1));
+    const fullSpins = Math.floor(minS + (rand() * (maxS - minS + 1)));
     const finalOffset = rand() * 360;
     const totalDelta = fullSpins * 360 + finalOffset;
 
@@ -313,28 +288,22 @@ html = f"""
     const startRot = rotationDeg;
 
     function frame(t){
-      const elapsed = t - start;
-      const p = clamp(elapsed / duration, 0, 1);
-      const eased = easeOutCubic(p);
-      rotationDeg = mod(startRot + eased * totalDelta, 360);
+      const p = clamp((t - start) / duration, 0, 1);
+      rotationDeg = mod(startRot + (1 - Math.pow(1-p,3)) * totalDelta, 360);
       drawWheel(rotationDeg);
       if (p < 1){
         requestAnimationFrame(frame);
       } else {
-        // settle
         const idx = computeWinner(rotationDeg);
         const win = labels[idx];
         history.unshift(win);
         document.getElementById('winner').textContent = "🎉 Winner: " + win;
         updateHistory();
 
-        const remove = document.getElementById('removeToggle').checked || INIT.removeAfterWin;
+        const remove = document.getElementById('removeToggle').checked || !!INIT.removeAfterWin;
         if (remove){
           labels.splice(idx,1);
           weights.splice(idx,1);
-          if (labels.length < 2){
-            history.unshift("(reset needed — fewer than 2 items)");
-          }
           recompute();
         }
         spinning = false;
@@ -345,11 +314,7 @@ html = f"""
 
   function updateHistory(){
     const el = document.getElementById('history');
-    if (!history.length){
-      el.textContent = "";
-      return;
-    }
-    el.innerHTML = "<b>Recent winners:</b> " + history.slice(0, 12).join(", ");
+    el.innerHTML = history.length ? ("<b>Recent winners:</b> " + history.slice(0,12).join(", ")) : "";
   }
 
   // ---------- Buttons ----------
@@ -366,7 +331,6 @@ html = f"""
     drawWheel(rotationDeg);
   });
   document.getElementById('removeToggle').checked = !!INIT.removeAfterWin;
-
   document.getElementById('downloadBtn').addEventListener('click', () => {
     const link = document.createElement('a');
     link.download = 'fortune_wheel.png';
@@ -374,10 +338,11 @@ html = f"""
     link.click();
   });
 
-  // ---------- Initial draw ----------
+  // ---------- First paint ----------
   drawWheel(rotationDeg);
 </script>
-"""
+'''
 
-st.components.v1.html(html, height=760, scrolling=False)
-
+# Safely inject JSON (no f-string braces issues)
+html = html_template.replace('__INIT_JSON__', json.dumps(config))
+st.components.v1.html(html, height=780, scrolling=False)
