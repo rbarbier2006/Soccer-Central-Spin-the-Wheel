@@ -489,5 +489,5 @@ else:
     else:
         st.info("No winners recorded yet. Spin the wheel, then click **Refresh winners** to pull them in.")
 
-st.caption("\nProgram Developed by Rene Barbier for Soccer Central San Antonio")
+st.caption("\n\n\nProgram Developed by Rene Barbier for Soccer Central San Antonio")
 
