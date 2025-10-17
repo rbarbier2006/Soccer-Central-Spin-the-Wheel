@@ -145,7 +145,7 @@ function setupCanvas(){
   canvas.style.height = size + "px";
   canvas.width = Math.floor(size * dpr);
   canvas.height = Math.floor(size * dpr);
-  ctx.setTransform(dpr,0,0,dpr,0,0); // draw in CSS pixels
+  ctx.setTransform(dpr,0,0,dpr,0,0);
 }
 setupCanvas();
 window.addEventListener('resize', ()=>{ setupCanvas(); draw(rotation); });
@@ -176,12 +176,12 @@ function draw(rot=0){
     ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; ctx.stroke();
   }
 
-  // labels
+  // labels anchored at the rim, flowing inward
   for(let i=0;i<n;i++){
     const a1 = rot + i*slice, a2 = rot + (i+1)*slice, mid = (a1+a2)/2;
     const name = labels[i];
 
-    // clip wedge
+    // clip to the wedge
     ctx.save();
     ctx.beginPath(); ctx.moveTo(CX,CY); ctx.arc(CX,CY,R,a1,a2,false); ctx.closePath(); ctx.clip();
 
@@ -189,10 +189,11 @@ function draw(rot=0){
     ctx.translate(CX,CY);
     ctx.rotate(mid);
 
-    const flipped = Math.cos(mid) < 0; // left half of the wheel
-    if (flipped) ctx.rotate(Math.PI);  // keep upright
+    // keep text upright on the left side
+    const flipped = Math.cos(mid) < 0;
+    if (flipped) ctx.rotate(Math.PI);
 
-    const maxW = (labelEnd - labelStart) * 0.95;
+    const maxW = (labelEnd - labelStart) * 0.95; // don't intrude past inner margin
 
     // auto-fit
     let font = 18;
@@ -204,10 +205,10 @@ function draw(rot=0){
       w = ctx.measureText(name).width;
     }
 
-    // *** key fix: anchor swap instead of negative x ***
-    ctx.textAlign = flipped ? "right" : "left";
+    // --- anchor at rim ---
+    const x = flipped ? -labelEnd : labelEnd;            // rim position
+    ctx.textAlign = flipped ? "left" : "right";          // flow inward
     ctx.textBaseline = "middle";
-    const x = labelStart;
 
     ctx.strokeStyle = "rgba(255,255,255,0.9)";
     ctx.lineWidth = Math.max(2, Math.floor(font/6));
@@ -215,8 +216,8 @@ function draw(rot=0){
     ctx.strokeText(name, x, 0);
     ctx.fillText(name, x, 0);
 
-    ctx.restore();  // inner save
-    ctx.restore();  // clip save
+    ctx.restore();
+    ctx.restore();
   }
 
   // hub on top
