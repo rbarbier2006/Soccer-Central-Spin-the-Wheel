@@ -4,10 +4,10 @@ import pandas as pd
 import streamlit as st
 from streamlit.components.v1 import html as st_html
 
-# Optional helper to read/write browser-localStorage from Streamlit
+# Read/write page JS from Streamlit (used to read/write localStorage and install a message bridge)
 try:
     from streamlit_js_eval import streamlit_js_eval
-except Exception:  # still works without it; we just won't show the log table
+except Exception:  # app still runs; winners table just won't show
     streamlit_js_eval = None
 
 # ---------------- Page / constants ----------------
@@ -197,7 +197,7 @@ function draw(rot=0){
     const flipped = Math.cos(mid) < 0;
     if (flipped) ctx.rotate(Math.PI);
 
-    const maxW = (labelEnd - labelStart) * 0.95; // don't intrude past inner margin
+    const maxW = (labelEnd - labelStart) * 0.95;
 
     // auto-fit
     let font = 18;
@@ -209,9 +209,9 @@ function draw(rot=0){
       w = ctx.measureText(name).width;
     }
 
-    // --- anchor at rim ---
-    const x = flipped ? -labelEnd : labelEnd;            // rim position
-    ctx.textAlign = flipped ? "left" : "right";          // flow inward
+    // anchor at rim, draw inward
+    const x = flipped ? -labelEnd : labelEnd;
+    ctx.textAlign = flipped ? "left" : "right";
     ctx.textBaseline = "middle";
 
     ctx.strokeStyle = "rgba(255,255,255,0.9)";
@@ -224,7 +224,7 @@ function draw(rot=0){
     ctx.restore();
   }
 
-  // hub on top
+  // hub
   ctx.beginPath(); ctx.arc(CX,CY,innerR,0,2*Math.PI);
   ctx.fillStyle="#fff"; ctx.fill();
   ctx.lineWidth = 2; ctx.strokeStyle="#333"; ctx.stroke();
@@ -255,7 +255,7 @@ function spin(){
       const full = fulls[lastIdx] || labels[lastIdx] || "";
       document.getElementById('winner').textContent = "🏆 Winner: " + full;
 
-      // ---- NEW: log winner to browser storage so Streamlit can export it ----
+      // ---- Log winner to iframe localStorage + mirror to parent (Streamlit page) ----
       try {
         const parts = (full || "").split(" - ");
         const rec = {
@@ -269,8 +269,10 @@ function spin(){
         const arr = JSON.parse(localStorage.getItem(KEY) || "[]");
         arr.push(rec);
         localStorage.setItem(KEY, JSON.stringify(arr));
+        // mirror to parent page (so Streamlit can read it)
+        try { window.parent.postMessage({ __raffle__: true, type: "append", rec: rec }, "*"); } catch(e){}
       } catch(e) { console.error("winner log error", e); }
-      // ----------------------------------------------------------------------
+      // -------------------------------------------------------------------------------
 
       setElims(false); spinning = false;
     }
@@ -396,13 +398,41 @@ if streamlit_js_eval is None:
         "`pip install streamlit-js-eval` (or add `streamlit-js-eval` to requirements.txt)"
     )
 else:
-    # Pull winners array from the browser (written by the wheel JS)
+    # ---- Install a bridge in the *parent* page to capture winners from the iframe ----
+    # When the iframe (wheel) posts {__raffle__: true, type:'append', rec}, we append it to
+    # the parent page's localStorage('raffle_winners_v1'), which we can read from Python.
+    streamlit_js_eval(
+        js_expressions="""
+(() => {
+  if (window.__raffle_listener_installed) return 'ok';
+  const KEY = 'raffle_winners_v1';
+  function append(rec){
+    try {
+      const arr = JSON.parse(localStorage.getItem(KEY) || '[]');
+      arr.push(rec);
+      localStorage.setItem(KEY, JSON.stringify(arr));
+    } catch(e) {}
+  }
+  window.addEventListener('message', (ev) => {
+    try {
+      const d = ev.data || {};
+      if (d && d.__raffle__ && d.type === 'append' && d.rec) append(d.rec);
+    } catch(e) {}
+  }, false);
+  window.__raffle_listener_installed = true;
+  return 'ok';
+})()
+        """,
+        key="install_raffle_bridge_v1",
+    )
+    # -------------------------------------------------------------------------------
+
+    # Pull winners from the parent page's localStorage
     winners_json = streamlit_js_eval(
         js_expressions="localStorage.getItem('raffle_winners_v1')",
         key="pull_winners_v1",
     )
 
-    # Parse -> DataFrame with desired columns
     winners = []
     if winners_json:
         try:
@@ -423,7 +453,6 @@ else:
 
         st.dataframe(wdf, use_container_width=True)
 
-        # Download as Excel
         xbytes = to_excel_bytes(wdf, header=True)
         st.download_button(
             "⬇️ Download winners (.xlsx)",
@@ -444,4 +473,4 @@ else:
                 )
                 st.experimental_rerun()
     else:
-        st.info("No winners recorded yet. Spin the wheel and they will appear here automatically.")
+        st.info("No winners recorded yet. Spin the wheel and click **Refresh winners** to update.")
