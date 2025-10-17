@@ -1,12 +1,4 @@
-# Build a Streamlit + JS (no matplotlib) fortune wheel project and zip it for download
-
-import json, zipfile
-from pathlib import Path
-
-project = Path("/mnt/data/fortune-wheel-js-streamlit")
-project.mkdir(parents=True, exist_ok=True)
-
-app_py = r'''# app.py
+# app.py
 # Streamlit Fortune Wheel (Python + JS, no matplotlib)
 # ---------------------------------------------------
 # - Renders an animated wheel in HTML5 Canvas via embedded JS.
@@ -388,16 +380,4 @@ html = f"""
 """
 
 st.components.v1.html(html, height=760, scrolling=False)
-'''
 
-reqs = "streamlit\npandas\n"
-
-readme = """# 🎡 Fortune Wheel — Streamlit + JS (no matplotlib)
-
-This Streamlit app renders a Fortune Wheel using an HTML5 Canvas with vanilla JavaScript.
-No matplotlib—just Python for the UI and JS for the drawing/animation.
-
-## Run locally
-```bash
-pip install -r requirements.txt
-streamlit run app.py
